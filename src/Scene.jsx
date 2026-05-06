@@ -121,6 +121,29 @@ function Player() {
     camera.lookAt(0, 0.5, 0);
   }, [camera, gameState]);
 
+  // Global keyboard listener fallback (WASD + Arrows)
+  useEffect(() => {
+    const onKey = (e) => {
+      if (gameState !== 'playing') return;
+      const code = e.code;
+      let dx = 0;
+      let dz = 0;
+      if (code === 'ArrowLeft' || code === 'KeyA') dx = -1;
+      else if (code === 'ArrowRight' || code === 'KeyD') dx = 1;
+      else if (code === 'ArrowUp' || code === 'KeyW') dz = -1;
+      else if (code === 'ArrowDown' || code === 'KeyS') dz = 1;
+      else return;
+
+      // Prevent 180-degree reversal
+      const cur = dirRef.current;
+      if (dx === -cur.x && dz === -cur.z) return;
+      dirRef.current.set(dx, 0, dz);
+    };
+
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [gameState]);
+
   useFrame((_, delta) => {
     const rb = bodyRef.current;
     if (!rb || gameState !== 'playing') return;
