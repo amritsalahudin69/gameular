@@ -278,6 +278,9 @@ function Player() {
 }
 
 export default function Scene() {
+  const mazeMatrix = useGameStore((s) => s.mazeMatrix);
+  const rows = mazeMatrix.length;
+  const cols = mazeMatrix[0].length;
   return (
     <>
       <ambientLight intensity={0.35} />
@@ -296,7 +299,7 @@ export default function Scene() {
       </Physics>
 
       <Environment preset="city" />
-      <ContactShadows position={[0, -0.001, 0]} opacity={0.4} scale={Math.max(COLS, ROWS) * CELL_SCALE} blur={2.3} far={16} />
+      <ContactShadows position={[0, -0.001, 0]} opacity={0.4} scale={Math.max(cols, rows) * CELL_SCALE} blur={2.3} far={16} />
     </>
   );
 }

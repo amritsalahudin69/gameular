@@ -211,19 +211,22 @@ export const useGameStore = create((set) => ({
   elapsedTime: 0,
   highScore: readNumber(HIGH_SCORE_KEY, 0),
   gameState: 'idle',
-  foodPosition: randomFoodPosition(),
+  currentLevel: initialLevel,
+  mazeMatrix: initialMaze,
+  foodPosition: pickRandomFood(initialMaze, initialSnake),
   selectedSkin: initialSkin,
 
   setGameState: (gameState) => set({ gameState }),
 
   startGame: () =>
-    set({
+    set((state) => ({
       gameState: 'playing',
       score: 0,
       elapsedTime: 0,
       snakeSegments: initialSnake.map((s) => ({ ...s })),
-      foodPosition: randomFoodPosition(),
-    }),
+      foodPosition: pickRandomFood(state.mazeMatrix || initialMaze, initialSnake),
+    })),
+
 
   gameOver: () =>
     set((state) => {
