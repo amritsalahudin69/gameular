@@ -22,23 +22,9 @@ const writeStorage = (key, value) => {
   window.localStorage.setItem(key, String(value));
 };
 
-export const MAZE_MATRIX = [
-  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
-  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-  [1,0,1,1,0,0,1,1,1,0,1,1,1,0,0,1,1,1,0,0,1],
-  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-  [1,0,1,0,1,1,1,0,1,1,1,0,1,1,1,0,1,0,1,0,1],
-  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-  [1,0,1,1,1,0,1,1,1,0,1,1,1,0,1,1,1,0,1,1,1],
-  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-  [1,0,1,0,1,1,1,1,1,1,1,1,1,1,1,0,1,0,1,0,1],
-  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-  [1,0,1,1,0,1,1,1,0,1,1,1,0,1,1,1,0,1,1,0,1],
-  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-  [1,0,1,1,1,1,1,0,1,1,1,0,1,1,1,1,1,1,1,0,1],
-  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
-];
+// Arena dimensions (must be odd to keep a centered origin)
+const ARENA_COLS = 41;
+const ARENA_ROWS = 29;
 
 export const SKIN_PRESETS = {
   classic: {
@@ -84,8 +70,9 @@ const LEVEL_CONFIGS = {
 };
 
 const generateMaze = (level = 2) => {
-  const rows = MAZE_MATRIX.length;
-  const cols = MAZE_MATRIX[0].length;
+  // Use explicit arena dimensions instead of legacy MAZE_MATRIX
+  const rows = ARENA_ROWS;
+  const cols = ARENA_COLS;
   const density = (LEVEL_CONFIGS[level] && LEVEL_CONFIGS[level].wallDensity) ?? 0.2;
   const maze = Array.from({ length: rows }, (_, z) =>
     Array.from({ length: cols }, (_, x) => (z === 0 || z === rows - 1 || x === 0 || x === cols - 1 ? 1 : 0)),
@@ -147,8 +134,9 @@ const generateMaze = (level = 2) => {
 };
 
 const gridToWorld = (x, z) => {
-  const rows = MAZE_MATRIX.length;
-  const cols = MAZE_MATRIX[0].length;
+  // Use arena constants for coordinate origin so world center remains at (0,0)
+  const cols = ARENA_COLS;
+  const rows = ARENA_ROWS;
   const ox = (cols - 1) / 2;
   const oz = (rows - 1) / 2;
   return { x: x - ox, y: FOOD_Y, z: z - oz, gx: x, gz: z };

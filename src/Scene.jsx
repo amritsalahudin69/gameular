@@ -62,7 +62,6 @@ const loadNumberblockTexture = (value, onLoaded) => {
 
 const MOVE_SPEED = 4.8;
 const STEP_INTERVAL = 0.18; // logical movement tick
-const CELL_SCALE = 2; // visual scale multiplier for plane/shadows
 const CAMERA_BASE = new THREE.Vector3(0, 7.5, 8.5);
 
 function Map() {
@@ -95,7 +94,7 @@ function Map() {
   return (
     <group>
       <mesh receiveShadow position={[0, -0.01, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-        <planeGeometry args={[cols * CELL_SCALE, rows * CELL_SCALE]} />
+        <planeGeometry args={[cols, rows]} />
         <meshStandardMaterial color="#24312f" roughness={0.95} metalness={0.05} />
       </mesh>
 
@@ -285,8 +284,121 @@ function Player() {
     const rb = bodyRef.current;
     if (!rb || gameState !== 'playing') return;
 
-    // visual interpolation
-    interpRef.current = Math.min(1, interpRef.current + delta / STEP_INTERVAL);
+    // timing accumulator: keep remainder when a logical step occurs
+    tickRef.current += delta;
+    elapsedRef.current += delta;
+    elapsedSyncRef.current += delta;
+
+    if (elapsedSyncRef.current >= 0.2) {
+      elapsedSyncRef.current = 0;
+      setElapsedTime(elapsedRef.current);
+    }
+
+    // process one-or-more logical steps while preserving remainder
+    while (tickRef.current >= STEP_INTERVAL) {
+      // consume the interval but keep remainder
+      tickRef.current -= STEP_INTERVAL;
+
+      // clear any previous new-tail hold now that a new interval starts
+      newTailHoldRef.current = null;
+
+      // commit pending direction (if any) once per tick before movement calculation
+      if (pendingDirRef.current) {
+        dirRef.current = pendingDirRef.current;
+        pendingDirRef.current = null;
+      }
+
+      const stepDir = dirRef.current;
+      const candidateGX = curGridRef.current.gx + stepDir.x;
+      const candidateGZ = curGridRef.current.gz + stepDir.z;
+
+      // defensive maze dimensions
+      const mazeRows = mazeMatrix?.length ?? 0;
+      const mazeCols = mazeMatrix && mazeMatrix[0] ? mazeMatrix[0].length : 0;
+
+      // helper: is inside maze bounds
+      const isInsideMaze = (gx, gz) => gx >= 0 && gz >= 0 && gx < mazeCols && gz < mazeRows;
+
+      // Validate candidate BEFORE mutating any runtime/grid state
+      if (!isInsideMaze(candidateGX, candidateGZ)) {
+        // Outside arena -> game over. Do not mutate any refs or history.
+        gameOver();
+        return;
+      }
+
+      // Safe to index mazeMatrix now because candidate is inside bounds
+      if (mazeMatrix[candidateGZ][candidateGX] === 1) {
+        // Wall cell -> game over. Do not mutate any refs or history.
+        gameOver();
+        return;
+      }
+
+      // Self-collision check (grid-based) — exclude the current tail cell which will vacate this tick
+      const snakeLen = (useGameStore.getState().snakeSegments || []).length;
+      // collision cells are history[1] .. history[snakeLen - 2] inclusive
+      const collisionEnd = snakeLen - 2;
+      if (collisionEnd >= 1) {
+        for (let i = 1; i <= collisionEnd; i += 1) {
+          const h = gridHistoryRef.current[i];
+          if (!h) continue;
+          if (h.gx === candidateGX && h.gz === candidateGZ) {
+            // collided with body (not tail) -> game over
+            gameOver();
+            return;
+          }
+        }
+      }
+
+      // Candidate valid and not colliding: commit movement
+      // advance grid
+      prevGridRef.current = { ...curGridRef.current };
+      curGridRef.current = { gx: candidateGX, gz: candidateGZ };
+
+      // reset interpolation fraction for the new step; the visual fraction will be recomputed below from the accumulator
+      interpRef.current = 0;
+
+      // push to history (head first)
+      gridHistoryRef.current.unshift({ gx: candidateGX, gz: candidateGZ });
+
+      // trim history deterministically to needed length (segments + margin)
+      const keep = segmentRefs.current.length + 5;
+      if (gridHistoryRef.current.length > keep) gridHistoryRef.current.length = keep;
+
+      // prepare segments positions for store sync using grid-derived positions (authoritative)
+      const syncCount = segmentRefs.current.length + 1; // head + bodies
+      const syncGrid = gridHistoryRef.current.slice(0, syncCount);
+      const segmentsWorld = syncGrid.map((g) => {
+        const v = gridToWorld(g.gx, g.gz);
+        return { x: v.x, y: v.y, z: v.z };
+      });
+
+      // record old length BEFORE growth to compute growthGrid index
+      const oldLength = (useGameStore.getState().snakeSegments || []).length;
+
+      syncSnakeSegments(segmentsWorld);
+
+      // After authoritative store sync, check logical food consumption using grid equality
+      const food = useGameStore.getState().foodPosition;
+      if (food && typeof food.gx === 'number' && food.gx === candidateGX && food.gz === candidateGZ) {
+        // determine growth grid (the previous tail cell) from history at index oldLength
+        const growthGrid = gridHistoryRef.current[oldLength];
+        let growthWorld = null;
+        if (growthGrid) {
+          const v = gridToWorld(growthGrid.gx, growthGrid.gz);
+          growthWorld = { x: v.x, y: v.y, z: v.z };
+        }
+        // stabilize new-tail visual until next tick
+        if (growthGrid) newTailHoldRef.current = { index: oldLength, gx: growthGrid.gx, gz: growthGrid.gz };
+
+        // consume exactly once per logical tick, providing authoritative growth world position
+        useGameStore.getState().eatFood(growthWorld);
+      }
+    }
+
+    // After processing logical steps, compute authoritative interpolation fraction from the accumulator
+    interpRef.current = Math.min(1, tickRef.current / STEP_INTERVAL);
+
+    // visual interpolation using authoritative interpRef
     const prev = gridToWorld(prevGridRef.current.gx, prevGridRef.current.gz);
     const cur = gridToWorld(curGridRef.current.gx, curGridRef.current.gz);
     const pos = prev.clone().lerp(cur, interpRef.current);
@@ -315,119 +427,11 @@ function Player() {
       segment.position.lerpVectors(prevWorld, newWorld, interpRef.current);
     });
 
-    // camera follow
-    const headWorld = cur.clone();
-    const camTarget = headWorld.add(new THREE.Vector3(0, CAMERA_BASE.y, CAMERA_BASE.z));
+    // camera follow — follow the interpolated head position (pos)
+    const headWorld = pos.clone();
+    const camTarget = headWorld.clone().add(new THREE.Vector3(0, CAMERA_BASE.y, CAMERA_BASE.z));
     camera.position.lerp(camTarget, Math.min(1, delta * 4.5));
     camera.lookAt(headWorld.x, headWorld.y + 0.6, headWorld.z);
-
-    // timing
-    tickRef.current += delta;
-    elapsedRef.current += delta;
-    elapsedSyncRef.current += delta;
-
-    if (elapsedSyncRef.current >= 0.2) {
-      elapsedSyncRef.current = 0;
-      setElapsedTime(elapsedRef.current);
-    }
-
-    // logical step
-    if (tickRef.current >= STEP_INTERVAL) {
-      // clear any previous new-tail hold now that a new interval starts
-      newTailHoldRef.current = null;
-
-      tickRef.current = 0;
-
-      // commit pending direction (if any) once per tick before movement calculation
-      if (pendingDirRef.current) {
-        dirRef.current = pendingDirRef.current;
-        pendingDirRef.current = null;
-      }
-
-      const stepDir = dirRef.current;
-      const candidateGX = curGridRef.current.gx + stepDir.x;
-      const candidateGZ = curGridRef.current.gz + stepDir.z;
-
-      // defensive maze dimensions
-      const mazeRows = mazeMatrix?.length ?? 0;
-      const mazeCols = mazeMatrix && mazeMatrix[0] ? mazeMatrix[0].length : 0;
-
-      // helper: is inside maze bounds
-      const isInsideMaze = (gx, gz) => gx >= 0 && gz >= 0 && gx < mazeCols && gz < mazeRows;
-
-        // Validate candidate BEFORE mutating any runtime/grid state
-      if (!isInsideMaze(candidateGX, candidateGZ)) {
-        // Outside arena -> game over. Do not mutate any refs or history.
-        gameOver();
-        return;
-      }
-
-      // Safe to index mazeMatrix now because candidate is inside bounds
-      if (mazeMatrix[candidateGZ][candidateGX] === 1) {
-        // Wall cell -> game over. Do not mutate any refs or history.
-        gameOver();
-        return;
-      }
-
-        // Self-collision check (grid-based) — exclude the current tail cell which will vacate this tick
-        const snakeLen = (useGameStore.getState().snakeSegments || []).length;
-        // collision cells are history[1] .. history[snakeLen - 2] inclusive
-        const collisionEnd = snakeLen - 2;
-        if (collisionEnd >= 1) {
-          for (let i = 1; i <= collisionEnd; i += 1) {
-            const h = gridHistoryRef.current[i];
-            if (!h) continue;
-            if (h.gx === candidateGX && h.gz === candidateGZ) {
-              // collided with body (not tail) -> game over
-              gameOver();
-              return;
-            }
-          }
-        }
-
-        // Candidate valid and not colliding: commit movement
-        // advance grid
-        prevGridRef.current = { ...curGridRef.current };
-        curGridRef.current = { gx: candidateGX, gz: candidateGZ };
-        interpRef.current = 0;
-
-        // push to history (head first)
-        gridHistoryRef.current.unshift({ gx: candidateGX, gz: candidateGZ });
-
-      // trim history deterministically to needed length (segments + margin)
-      const keep = segmentRefs.current.length + 5;
-      if (gridHistoryRef.current.length > keep) gridHistoryRef.current.length = keep;
-
-      // prepare segments positions for store sync using grid-derived positions (authoritative)
-      const syncCount = segmentRefs.current.length + 1; // head + bodies
-      const syncGrid = gridHistoryRef.current.slice(0, syncCount);
-      const segmentsWorld = syncGrid.map((g) => {
-        const v = gridToWorld(g.gx, g.gz);
-        return { x: v.x, y: v.y, z: v.z };
-      });
-
-        // record old length BEFORE growth to compute growthGrid index
-        const oldLength = (useGameStore.getState().snakeSegments || []).length;
-
-        syncSnakeSegments(segmentsWorld);
-
-        // After authoritative store sync, check logical food consumption using grid equality
-        const food = useGameStore.getState().foodPosition;
-        if (food && typeof food.gx === 'number' && food.gx === candidateGX && food.gz === candidateGZ) {
-          // determine growth grid (the previous tail cell) from history at index oldLength
-          const growthGrid = gridHistoryRef.current[oldLength];
-          let growthWorld = null;
-          if (growthGrid) {
-            const v = gridToWorld(growthGrid.gx, growthGrid.gz);
-            growthWorld = { x: v.x, y: v.y, z: v.z };
-          }
-          // stabilize new-tail visual until next tick
-          if (growthGrid) newTailHoldRef.current = { index: oldLength, gx: growthGrid.gx, gz: growthGrid.gz };
-
-          // consume exactly once per logical tick, providing authoritative growth world position
-          useGameStore.getState().eatFood(growthWorld);
-        }
-    }
   });
 
   return (
@@ -496,7 +500,7 @@ export default function Scene() {
       </Physics>
 
       <Environment preset="city" />
-      <ContactShadows position={[0, -0.001, 0]} opacity={0.4} scale={Math.max(cols, rows) * CELL_SCALE} blur={2.3} far={16} />
+      <ContactShadows position={[0, -0.001, 0]} opacity={0.4} scale={Math.max(cols, rows)} blur={2.3} far={16} />
     </>
   );
 }
