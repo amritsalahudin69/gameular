@@ -10,8 +10,11 @@ import {
 import * as THREE from 'three';
 import { SKIN_PRESETS, useGameStore } from './Store';
 
-// Simple texture cache and loader for Numberblocks PNGs. Keys: positive integer value -> THREE.Texture | null (failed) | undefined (loading)
+// Simple texture cache and loader for Numberblocks PNGs.
+// textureCache: key -> THREE.Texture | null (failed)
+// pendingLoads: key -> array of callbacks to notify when load completes
 const textureCache = new globalThis.Map();
+const pendingLoads = new globalThis.Map();
 const textureLoader = new THREE.TextureLoader();
 
 const getNumberblockAssetPath = (value) => {
@@ -26,38 +29,40 @@ const loadNumberblockTexture = (value, onLoaded) => {
     onLoaded(null);
     return;
   }
-  const existing = textureCache.get(key);
-  if (existing === null) {
-    // previously failed
-    onLoaded(null);
+
+  const cached = textureCache.get(key);
+  if (cached !== undefined) {
+    // cached result (either texture or null for failure)
+    onLoaded(cached);
     return;
   }
-  if (existing && existing.isTexture) {
-    onLoaded(existing);
+
+  // if there's an active load, queue the callback
+  const pending = pendingLoads.get(key);
+  if (pending) {
+    pending.push(onLoaded);
     return;
   }
-  if (existing === undefined) {
-    // mark as loading to avoid duplicate requests
-    textureCache.set(key, null);
-    const url = getNumberblockAssetPath(key);
-    textureLoader.load(
-      url,
-      (tex) => {
-      // store texture as-is; avoid forcing encoding that may not be exported in this three build
-        textureCache.set(key, tex);
-        onLoaded(tex);
-      },
-      undefined,
-      () => {
-        // error
-        textureCache.set(key, null);
-        onLoaded(null);
-      },
-    );
-    return;
-  }
-  // if existing is null and not undefined, treat as failed
-  onLoaded(null);
+
+  // start loading and queue this callback
+  pendingLoads.set(key, [onLoaded]);
+  const url = getNumberblockAssetPath(key);
+  textureLoader.load(
+    url,
+    (tex) => {
+      textureCache.set(key, tex);
+      const callbacks = pendingLoads.get(key) || [];
+      pendingLoads.delete(key);
+      callbacks.forEach((cb) => cb(tex));
+    },
+    undefined,
+    () => {
+      textureCache.set(key, null);
+      const callbacks = pendingLoads.get(key) || [];
+      pendingLoads.delete(key);
+      callbacks.forEach((cb) => cb(null));
+    },
+  );
 };
 
 const MOVE_SPEED = 4.8;
@@ -112,9 +117,6 @@ function Food() {
   const foodPosition = useGameStore((s) => s.foodPosition);
   const currentFoodValue = useGameStore((s) => s.currentFoodValue);
 
-  // If no valid food, render nothing
-  if (!foodPosition) return null;
-
   // texture state per food value
   const texRef = useRef(null);
   const [texState, setTexState] = useState(null);
@@ -122,16 +124,17 @@ function Food() {
   useEffect(() => {
     let mounted = true;
     setTexState(null);
-    if (!currentFoodValue) return;
+    if (!currentFoodValue) return () => { mounted = false; };
     loadNumberblockTexture(currentFoodValue, (tex) => {
       if (!mounted) return;
       texRef.current = tex;
       setTexState(tex);
     });
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, [currentFoodValue]);
+
+  // If no valid food, render nothing
+  if (!foodPosition) return null;
 
   return (
     <RigidBody
@@ -141,16 +144,17 @@ function Food() {
       position={[foodPosition.x, foodPosition.y, foodPosition.z]}
     >
       <CuboidCollider args={[0.3, 0.3, 0.3]} sensor />
-      <mesh castShadow>
-        <icosahedronGeometry args={[0.3, 0]} />
-        <meshStandardMaterial color="#ff8c42" roughness={0.35} metalness={0.15} />
-      </mesh>
 
       {texState ? (
-        <sprite position={[0, 0.45, 0]} scale={[0.9, 0.9, 1]}> 
+        <sprite position={[0, 0, 0]} scale={[0.9, 0.9, 1]}> 
           <spriteMaterial attach="material" map={texState} transparent />
         </sprite>
-      ) : null}
+      ) : (
+        <mesh castShadow>
+          <icosahedronGeometry args={[0.3, 0]} />
+          <meshStandardMaterial color="#ff8c42" roughness={0.35} metalness={0.15} />
+        </mesh>
+      )}
     </RigidBody>
   );
 }
@@ -175,6 +179,8 @@ function Player() {
   const selectedSkin = useGameStore((s) => s.selectedSkin);
   const setElapsedTime = useGameStore((s) => s.setElapsedTime);
   const mazeMatrix = useGameStore((s) => s.mazeMatrix);
+  const levelConfig = useGameStore((s) => s.levelConfig);
+  const stepInterval = (levelConfig && levelConfig.stepIntervalSec) || STEP_INTERVAL;
   const [, getKeys] = useKeyboardControls();
   const { camera } = useThree();
   const skin = SKIN_PRESETS[selectedSkin] ?? SKIN_PRESETS.classic;
@@ -306,9 +312,9 @@ function Player() {
     }
 
     // process one-or-more logical steps while preserving remainder
-    while (tickRef.current >= STEP_INTERVAL) {
+    while (tickRef.current >= stepInterval) {
       // consume the interval but keep remainder
-      tickRef.current -= STEP_INTERVAL;
+      tickRef.current -= stepInterval;
 
       // clear any previous new-tail hold now that a new interval starts
       newTailHoldRef.current = null;
@@ -418,8 +424,18 @@ function Player() {
           const v = gridToWorld(growthGrid.gx, growthGrid.gz);
           growthWorld = { x: v.x, y: v.y, z: v.z };
         }
-        // stabilize new-tail visual until next tick
-        if (growthGrid) newTailHoldRef.current = { index: oldLength, gx: growthGrid.gx, gz: growthGrid.gz };
+
+        // multi-value growth: append additional repeated copies of growthGrid to history
+        const eatenValue = useGameStore.getState().currentFoodValue || 0;
+        if (growthGrid && eatenValue > 0) {
+          // gridHistory already contains the previous tail at index oldLength; append (eatenValue - 1) more copies
+          const extra = Math.max(0, eatenValue - 1);
+          for (let k = 0; k < extra; k += 1) {
+            gridHistoryRef.current.push({ gx: growthGrid.gx, gz: growthGrid.gz });
+          }
+          // stabilize new-tail visuals at the first appended index
+          newTailHoldRef.current = { index: oldLength, gx: growthGrid.gx, gz: growthGrid.gz };
+        }
 
         // consume exactly once per logical tick, providing authoritative growth world position
         useGameStore.getState().eatFood(growthWorld);
@@ -427,7 +443,7 @@ function Player() {
     }
 
     // After processing logical steps, compute authoritative interpolation fraction from the accumulator
-    interpRef.current = Math.min(1, tickRef.current / STEP_INTERVAL);
+    interpRef.current = Math.min(1, tickRef.current / stepInterval);
 
     // visual interpolation using authoritative interpRef
     const prev = gridToWorld(prevGridRef.current.gx, prevGridRef.current.gz);
@@ -475,18 +491,17 @@ function Player() {
         name="player-head"
       >
         <CuboidCollider args={[0.38, 0.38, 0.38]} />
-        {/* Head base cube */}
-        <mesh castShadow>
-          <boxGeometry args={[0.96, 0.96, 0.96]} />
-          <meshStandardMaterial color={skin.headColor} roughness={0.45} metalness={0.2} />
-        </mesh>
-
-        {/* Numberblock overlay as a camera-facing sprite when available */}
-        {headTex ? (
-          <sprite position={[0, 0.55, 0]} scale={[1.25, 1.25, 1]}> 
-            <spriteMaterial attach="material" map={headTex} transparent />
-          </sprite>
-        ) : null}
+          {/* Head: use Numberblock sprite as primary when available, otherwise fallback to cube */}
+          {headTex ? (
+            <sprite position={[0, 0, 0]} scale={[1.0, 1.0, 1]}> 
+              <spriteMaterial attach="material" map={headTex} transparent />
+            </sprite>
+          ) : (
+            <mesh castShadow>
+              <boxGeometry args={[0.96, 0.96, 0.96]} />
+              <meshStandardMaterial color={skin.headColor} roughness={0.45} metalness={0.2} />
+            </mesh>
+          )}
       </RigidBody>
 
       {Array.from({ length: Math.max(0, segmentCount) }).map((_, i) => (

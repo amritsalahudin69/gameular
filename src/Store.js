@@ -69,7 +69,7 @@ const LEVEL_CONFIGS = {
   10: { wallDensity: 0.45, label: 'Insane' },
 };
 
-const generateMaze = (level = 2) => {
+const generateMaze = (level = 2, startValue = 1) => {
   // Use explicit arena dimensions instead of legacy MAZE_MATRIX
   const rows = ARENA_ROWS;
   const cols = ARENA_COLS;
@@ -84,14 +84,15 @@ const generateMaze = (level = 2) => {
     }
   }
 
-  // Ensure a small clear area around center so snake can spawn safely
+  // Ensure a deterministic clear corridor around center so snake can spawn safely and have a forward path
   const cx = Math.floor(cols / 2);
   const cz = Math.floor(rows / 2);
-  for (let dz = -1; dz <= 1; dz += 1) {
-    for (let dx = -1; dx <= 1; dx += 1) {
-      const rz = cz + dz;
-      const rx = cx + dx;
-      if (rz > 0 && rz < rows - 1 && rx > 0 && rx < cols - 1) maze[rz][rx] = 0;
+  const backDepth = Math.max(0, (Math.floor(Number(startValue) || 1) - 1));
+  const zStart = Math.max(1, cz - backDepth);
+  const zEnd = Math.min(rows - 2, cz + 5);
+  for (let gz = zStart; gz <= zEnd; gz += 1) {
+    for (let gx = cx - 1; gx <= cx + 1; gx += 1) {
+      if (gz > 0 && gz < rows - 1 && gx > 0 && gx < cols - 1) maze[gz][gx] = 0;
     }
   }
 
@@ -214,9 +215,8 @@ const pickRandomFood = (matrix, snakeSegments = []) => {
   return world;
 };
 
-// initial level and maze
+// initial level
 const initialLevel = 2;
-const initialMaze = generateMaze(initialLevel);
 
 // helper to build initial snake segments from a startValue (head + bodies behind)
 const buildInitialSnake = (startValue) => {
@@ -233,6 +233,9 @@ const buildInitialSnake = (startValue) => {
 import level1 from './snakeLevel1.json';
 const DEFAULT_LEVEL_CONFIG = level1 || { id: 'snake-level-1', startValue: 1, foods: [3,2,1,4,2,3,1,2,4,1] };
 const initialLevelConfig = DEFAULT_LEVEL_CONFIG;
+
+// initial maze depends on initial level config startValue
+const initialMaze = generateMaze(initialLevel, (initialLevelConfig && initialLevelConfig.startValue) || 1);
 
 // helper to convert world snake segments to grid keys
 const snakeToGridSet = (segments, matrix) => {
@@ -363,9 +366,9 @@ export const useGameStore = create((set) => ({
 
   setLevel: (level) => set((state) => {
       const lvl = Math.max(0, Math.min(10, Number(level)));
-      const m = generateMaze(lvl);
       const cfg = state.levelConfig || initialLevelConfig;
       const startValue = (cfg && cfg.startValue) || 1;
+      const m = generateMaze(lvl, startValue);
       const initial = buildInitialSnake(startValue).map((s) => ({ ...s }));
       return {
         currentLevel: lvl,
@@ -386,5 +389,21 @@ export const useGameStore = create((set) => ({
       return { selectedSkin: skinKey };
     }),
 
-  regenerateMaze: () => set((state) => ({ mazeMatrix: generateMaze(state.currentLevel) })),
+  regenerateMaze: () => set((state) => {
+    const cfg = state.levelConfig || initialLevelConfig;
+    const startValue = (cfg && cfg.startValue) || 1;
+    const m = generateMaze(state.currentLevel, startValue);
+    const initial = buildInitialSnake(startValue).map((s) => ({ ...s }));
+    return {
+      mazeMatrix: m,
+      snakeSegments: initial,
+      currentValue: startValue,
+      currentFoodIndex: 0,
+      currentFoodValue: (cfg && cfg.foods && cfg.foods[0]) || null,
+      foodPosition: pickRandomFood(m, initial),
+      gameState: 'idle',
+      score: 0,
+      elapsedTime: 0,
+    };
+  }),
 }));
