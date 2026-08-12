@@ -53,6 +53,19 @@ function Hud() {
           alignItems: 'center',
         }}
       >
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <label style={{ fontSize: 12, opacity: 0.9, marginRight: 6 }}>Level</label>
+          <select
+            value={useGameStore((s) => s.currentLevel)}
+            onChange={(e) => useGameStore.getState().setLevel(Number(e.target.value))}
+            style={{ padding: '6px 8px', borderRadius: 6 }}
+          >
+            {Array.from({ length: 11 }).map((_, i) => (
+              <option key={i} value={i}>Level {i}</option>
+            ))}
+          </select>
+        </div>
+
         {Object.entries(SKIN_PRESETS).map(([key, skin]) => (
           <button
             key={key}

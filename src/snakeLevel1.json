@@ -1,0 +1,5 @@
+{
+  "id": "snake-level-1",
+  "startValue": 1,
+  "foods": [3, 2, 1, 4, 2, 3, 1, 2, 4, 1]
+}
