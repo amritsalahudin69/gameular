@@ -181,11 +181,10 @@ function Player() {
   const interpRef = useRef(1);
   const newTailHoldRef = useRef(null); // { index, gx, gz } to stabilize new-tail visuals for one interval
 
-  const segmentCount = useGameStore((s) => s.snakeSegments.length - 1);
+  const segmentCount = useGameStore((s) => Math.max(0, s.snakeSegments.length - 1));
   const gameState = useGameStore((s) => s.gameState);
   const gameOver = useGameStore((s) => s.gameOver);
   const selectedSkin = useGameStore((s) => s.selectedSkin);
-  const syncSnakeSegments = useGameStore((s) => s.syncSnakeSegments);
   const setElapsedTime = useGameStore((s) => s.setElapsedTime);
   const mazeMatrix = useGameStore((s) => s.mazeMatrix);
   const [, getKeys] = useKeyboardControls();
@@ -199,22 +198,21 @@ function Player() {
 
   const gridToWorld = (gx, gz) => new THREE.Vector3(gx - ox, 0.5, gz - oz);
 
-  // Numberblock head texture (based on levelConfig.startValue)
-  const levelConfig = useGameStore((s) => s.levelConfig);
-  const startValue = (levelConfig && levelConfig.startValue) || 1;
+  // Numberblock head texture (based on authoritative currentValue)
+  const currentValue = useGameStore((s) => s.currentValue);
   const headTexRef = useRef(null);
   const [headTex, setHeadTex] = useState(null);
 
   useEffect(() => {
     let mounted = true;
     setHeadTex(null);
-    loadNumberblockTexture(startValue, (tex) => {
+    loadNumberblockTexture(currentValue, (tex) => {
       if (!mounted) return;
       headTexRef.current = tex;
       setHeadTex(tex);
     });
     return () => { mounted = false; };
-  }, [startValue]);
+  }, [currentValue]);
 
   // Ensure camera is oriented toward arena on mount (idle and other states)
   useEffect(() => {
@@ -260,6 +258,11 @@ function Player() {
     camera.position.copy(CAMERA_BASE);
     camera.lookAt(0, 0.5, 0);
   }, [camera, gameState, mazeMatrix]);
+
+  // keep segmentRefs trimmed to authoritative active count to avoid stale indexes
+  useEffect(() => {
+    segmentRefs.current.length = segmentCount;
+  }, [segmentCount]);
 
   // keyboard fallback — enqueue at most one pending direction per logical tick
   useEffect(() => {
@@ -482,11 +485,11 @@ function Player() {
       gridHistoryRef.current.unshift({ gx: candidateGX, gz: candidateGZ });
 
       // trim history deterministically to needed length (segments + margin)
-      const keep = segmentRefs.current.length + 5;
+      const keep = segmentCount + 5;
       if (gridHistoryRef.current.length > keep) gridHistoryRef.current.length = keep;
 
       // prepare segments positions for store sync using grid-derived positions (authoritative)
-      const syncCount = segmentRefs.current.length + 1; // head + bodies
+      const syncCount = segmentCount + 1; // head + bodies
       const syncGrid = gridHistoryRef.current.slice(0, syncCount);
       const segmentsWorld = syncGrid.map((g) => {
         const v = gridToWorld(g.gx, g.gz);
@@ -496,7 +499,7 @@ function Player() {
       // record old length BEFORE growth to compute growthGrid index
       const oldLength = (useGameStore.getState().snakeSegments || []).length;
 
-      syncSnakeSegments(segmentsWorld);
+      useGameStore.getState().syncSnakeSegments(segmentsWorld);
 
       // After authoritative store sync, check logical food consumption using grid equality
       const food = useGameStore.getState().foodPosition;
@@ -526,7 +529,7 @@ function Player() {
     rb.setNextKinematicTranslation(pos);
 
     // update segments visuals by following consecutive gridHistory cells
-    const maxHistory = segmentRefs.current.length + 5; // keep only enough history for segments + small margin
+    const maxHistory = segmentCount + 5; // keep only enough history for segments + small margin
     if (gridHistoryRef.current.length > maxHistory) gridHistoryRef.current.length = maxHistory;
 
     segmentRefs.current.forEach((segment, i) => {
