@@ -284,6 +284,14 @@ function Player() {
     const rb = bodyRef.current;
     if (!rb || gameState !== 'playing') return;
 
+    // tiny diagnostic helper to report why a logical game over occurred
+    const reportGameOver = (reason, details = {}) => {
+      // Emit a deterministic console warning with structured details
+      // eslint-disable-next-line no-console
+      console.warn('[SNAKE_GAME_OVER]', { reason, ...details });
+      gameOver();
+    };
+
     // timing accumulator: keep remainder when a logical step occurs
     tickRef.current += delta;
     elapsedRef.current += delta;
@@ -322,14 +330,27 @@ function Player() {
       // Validate candidate BEFORE mutating any runtime/grid state
       if (!isInsideMaze(candidateGX, candidateGZ)) {
         // Outside arena -> game over. Do not mutate any refs or history.
-        gameOver();
+        reportGameOver('BOUNDARY', {
+          currentGX: curGridRef.current.gx,
+          currentGZ: curGridRef.current.gz,
+          candidateGX,
+          candidateGZ,
+          mazeCols,
+          mazeRows,
+        });
         return;
       }
 
       // Safe to index mazeMatrix now because candidate is inside bounds
       if (mazeMatrix[candidateGZ][candidateGX] === 1) {
         // Wall cell -> game over. Do not mutate any refs or history.
-        gameOver();
+        reportGameOver('WALL', {
+          currentGX: curGridRef.current.gx,
+          currentGZ: curGridRef.current.gz,
+          candidateGX,
+          candidateGZ,
+          mazeValue: mazeMatrix[candidateGZ][candidateGX],
+        });
         return;
       }
 
@@ -343,7 +364,14 @@ function Player() {
           if (!h) continue;
           if (h.gx === candidateGX && h.gz === candidateGZ) {
             // collided with body (not tail) -> game over
-            gameOver();
+            reportGameOver('SELF', {
+              currentGX: curGridRef.current.gx,
+              currentGZ: curGridRef.current.gz,
+              candidateGX,
+              candidateGZ,
+              collisionHistoryIndex: i,
+              snakeLength: snakeLen,
+            });
             return;
           }
         }
@@ -442,9 +470,6 @@ function Player() {
         colliders={false}
         position={[0, 0.5, 0]}
         name="player-head"
-        onCollisionEnter={() => {
-          gameOver();
-        }}
       >
         <CuboidCollider args={[0.38, 0.38, 0.38]} />
         {/* Head base cube */}
