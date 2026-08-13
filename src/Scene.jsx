@@ -276,6 +276,28 @@ function Player() {
     segmentRefs.current.length = segmentCount;
   }, [segmentCount]);
 
+  // unified input gate: validate and enqueue a requested direction
+  const requestDirection = (dx, dz) => {
+    if (gameState !== 'playing') return false;
+    if (!Number.isFinite(dx) || !Number.isFinite(dz)) return false;
+    dx = Math.round(dx);
+    dz = Math.round(dz);
+    // allow only cardinal unit vectors
+    const valid = (Math.abs(dx) === 1 && dz === 0) || (Math.abs(dz) === 1 && dx === 0);
+    if (!valid) return false;
+
+    const committed = dirRef.current;
+    // reject direct reversal against the committed direction
+    if (dx === -committed.x && dz === -committed.z) return false;
+    // ignore if identical to committed
+    if (dx === committed.x && dz === committed.z) return false;
+    // allow only one pending change before next logical tick
+    if (pendingDirRef.current) return false;
+
+    pendingDirRef.current = { x: dx, z: dz };
+    return true;
+  };
+
   // keyboard fallback — enqueue at most one pending direction per logical tick
   useEffect(() => {
     const onKey = (e) => {
@@ -292,19 +314,27 @@ function Player() {
       // prevent page scrolling while playing for arrow keys
       if (code.startsWith('Arrow')) e.preventDefault();
 
-      const committed = dirRef.current;
-      // reject direct reversal against the committed direction
-      if (dx === -committed.x && dz === -committed.z) return;
-      // ignore if identical to committed
-      if (dx === committed.x && dz === committed.z) return;
-      // allow only one pending change before next logical tick
-      if (pendingDirRef.current) return;
-
-      pendingDirRef.current = { x: dx, z: dz };
+      requestDirection(dx, dz);
     };
 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
+  }, [gameState]);
+
+  // listen for external mobile/custom direction events
+  useEffect(() => {
+    const onDir = (e) => {
+      try {
+        const d = e && e.detail;
+        if (!d) return;
+        requestDirection(d.x, d.z);
+      } catch (err) {
+        // ignore malformed event
+      }
+    };
+
+    window.addEventListener('snake-direction', onDir);
+    return () => window.removeEventListener('snake-direction', onDir);
   }, [gameState]);
 
   useFrame((_, delta) => {

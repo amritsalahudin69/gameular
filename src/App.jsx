@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { KeyboardControls } from '@react-three/drei';
 import Scene from './Scene.jsx';
@@ -25,6 +26,7 @@ function Hud() {
   const selectedSkin = useGameStore((s) => s.selectedSkin);
   const setSkin = useGameStore((s) => s.setSkin);
   const startGame = useGameStore((s) => s.startGame);
+  const currentValue = useGameStore((s) => s.currentValue);
 
   return (
     <div
@@ -86,7 +88,7 @@ function Hud() {
         ))}
       </div>
 
-      {(gameState === 'idle' || gameState === 'gameover') && (
+      {(gameState === 'idle' || gameState === 'gameover' || gameState === 'complete') && (
         <div
           style={{
             pointerEvents: 'auto',
@@ -97,20 +99,42 @@ function Hud() {
             textAlign: 'center',
           }}
         >
-          <button
-            onClick={startGame}
-            style={{
-              border: 0,
-              borderRadius: 10,
-              background: '#22d3ee',
-              color: '#042f2e',
-              padding: '12px 20px',
-              fontWeight: 700,
-              cursor: 'pointer',
-            }}
-          >
-            {gameState === 'gameover' ? 'Restart' : 'Start Game'}
-          </button>
+          {gameState === 'complete' ? (
+            <div>
+              <div style={{ marginBottom: 12, fontSize: 22, fontWeight: 800 }}>Level Complete</div>
+              <div style={{ marginBottom: 8 }}>Final Numberblock: {currentValue}</div>
+              <div style={{ marginBottom: 16 }}>Score: {score}</div>
+              <button
+                onClick={startGame}
+                style={{
+                  border: 0,
+                  borderRadius: 10,
+                  background: '#22d3ee',
+                  color: '#042f2e',
+                  padding: '12px 20px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Play Again
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={startGame}
+              style={{
+                border: 0,
+                borderRadius: 10,
+                background: '#22d3ee',
+                color: '#042f2e',
+                padding: '12px 20px',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              {gameState === 'gameover' ? 'Restart' : 'Start Game'}
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -118,18 +142,177 @@ function Hud() {
 }
 
 export default function App() {
+  const gameState = useGameStore((s) => s.gameState);
+
+  const DPad = () => {
+    if (gameState !== 'playing') return null;
+    const btnCommon = {
+      width: 56,
+      height: 56,
+      borderRadius: 12,
+      background: 'rgba(16, 54, 61, 0.78)',
+      color: '#e6fffd',
+      border: '1px solid rgba(255,255,255,0.08)',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      touchAction: 'none',
+      userSelect: 'none',
+      WebkitUserSelect: 'none',
+      msUserSelect: 'none',
+      cursor: 'pointer',
+      fontSize: 18,
+      lineHeight: '18px',
+    };
+
+    const dispatchDir = (x, z, e) => {
+      if (e && typeof e.preventDefault === 'function') e.preventDefault();
+      if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+      window.dispatchEvent(new CustomEvent('snake-direction', { detail: { x, z } }));
+    };
+
+    return (
+      <div
+        style={{
+          position: 'fixed',
+          bottom: 18,
+          left: 18,
+          width: 170,
+          height: 170,
+          pointerEvents: 'auto',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <div style={{ position: 'relative', width: 170, height: 170 }}>
+          <div style={{ position: 'absolute', left: 57, top: 6 }}>
+            <div
+              role="button"
+              tabIndex={0}
+              onPointerDown={(e) => dispatchDir(0, -1, e)}
+              onPointerUp={(e) => e.stopPropagation()}
+              style={{ ...btnCommon }}
+            >
+              ▲
+            </div>
+          </div>
+
+          <div style={{ position: 'absolute', left: 6, top: 57 }}>
+            <div
+              role="button"
+              tabIndex={0}
+              onPointerDown={(e) => dispatchDir(-1, 0, e)}
+              onPointerUp={(e) => e.stopPropagation()}
+              style={{ ...btnCommon }}
+            >
+              ◀
+            </div>
+          </div>
+
+          <div style={{ position: 'absolute', left: 57, top: 57 }}>
+            <div
+              role="button"
+              tabIndex={0}
+              onPointerDown={(e) => dispatchDir(0, 1, e)}
+              onPointerUp={(e) => e.stopPropagation()}
+              style={{ ...btnCommon }}
+            >
+              ▼
+            </div>
+          </div>
+
+          <div style={{ position: 'absolute', left: 108, top: 57 }}>
+            <div
+              role="button"
+              tabIndex={0}
+              onPointerDown={(e) => dispatchDir(1, 0, e)}
+              onPointerUp={(e) => e.stopPropagation()}
+              style={{ ...btnCommon }}
+            >
+              ▶
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // swipe handling attached to the canvas container to detect mobile swipes
+  const swipeRef = useRef({ active: false, startX: 0, startY: 0, pointerId: null });
+  const SWIPE_THRESHOLD = 30; // pixels
+
+  const onCanvasPointerDown = (e) => {
+    // Ignore if starting on interactive controls (buttons/selects/inputs or elements with role=button)
+    const tgt = e.target;
+    if (!tgt) return;
+    const tag = (tgt.tagName || '').toUpperCase();
+    if (tag === 'BUTTON' || tag === 'SELECT' || tag === 'INPUT' || tgt.getAttribute && tgt.getAttribute('role') === 'button') return;
+
+    // only primary button for mouse
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+
+    swipeRef.current.active = true;
+    swipeRef.current.startX = e.clientX;
+    swipeRef.current.startY = e.clientY;
+    swipeRef.current.pointerId = e.pointerId;
+
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
+  };
+
+  const onCanvasPointerUp = (e) => {
+    if (!swipeRef.current.active) return;
+    if (e.pointerId !== swipeRef.current.pointerId) return;
+
+    const dx = e.clientX - swipeRef.current.startX;
+    const dy = e.clientY - swipeRef.current.startY;
+
+    // reset state early to avoid duplicate handling
+    swipeRef.current.active = false;
+    swipeRef.current.pointerId = null;
+
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (_) {}
+
+    if (Math.abs(dx) < SWIPE_THRESHOLD && Math.abs(dy) < SWIPE_THRESHOLD) return; // tap
+
+    // dominant axis
+    if (Math.abs(dx) > Math.abs(dy)) {
+      // horizontal
+      if (dx > 0) window.dispatchEvent(new CustomEvent('snake-direction', { detail: { x: 1, z: 0 } }));
+      else window.dispatchEvent(new CustomEvent('snake-direction', { detail: { x: -1, z: 0 } }));
+    } else {
+      // vertical
+      if (dy > 0) window.dispatchEvent(new CustomEvent('snake-direction', { detail: { x: 0, z: 1 } }));
+      else window.dispatchEvent(new CustomEvent('snake-direction', { detail: { x: 0, z: -1 } }));
+    }
+  };
+
+  const onCanvasPointerCancel = (e) => {
+    swipeRef.current.active = false;
+    swipeRef.current.pointerId = null;
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (_) {}
+  };
+
   return (
     <KeyboardControls map={controlsMap}>
-      <Canvas
-        shadows
-        gl={{ alpha: false, antialias: false, powerPreference: 'high-performance' }}
-        camera={{ fov: 55, near: 0.1, far: 100, position: [0, 7.5, 8.5] }}
-        dpr={[1, 1.5]}
+      <div
+        onPointerDown={onCanvasPointerDown}
+        onPointerUp={onCanvasPointerUp}
+        onPointerCancel={onCanvasPointerCancel}
+        style={{ position: 'relative', touchAction: 'none' }}
       >
-        <color attach="background" args={['#0b1316']} />
-        <Scene />
-      </Canvas>
+        <Canvas
+          shadows
+          gl={{ alpha: false, antialias: false, powerPreference: 'high-performance' }}
+          camera={{ fov: 55, near: 0.1, far: 100, position: [0, 7.5, 8.5] }}
+          dpr={[1, 1.5]}
+        >
+          <color attach="background" args={['#0b1316']} />
+          <Scene />
+        </Canvas>
+      </div>
       <Hud />
+      <DPad />
     </KeyboardControls>
   );
 }

@@ -3,7 +3,7 @@
 
   "startValue": 1,
 
-  "foods": [3, 2, 1, 4, 2, 3, 1, 2, 4, 1],
+  "foods": [1, 2, 45, 10, 2, 3, 1, 2, 4, 1],
 
   "gameplay": {
     "stepIntervalSec": 0.18
