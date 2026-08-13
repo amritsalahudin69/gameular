@@ -89,7 +89,7 @@ const LEVEL_CONFIGS = {
   10: { wallDensity: 0.45, label: 'Insane' },
 };
 
-const generateMaze = (level = 2) => {
+const generateMaze = (level = 2, startValue = 1) => {
   // Use explicit arena dimensions instead of legacy MAZE_MATRIX
   const rows = ARENA_ROWS;
   const cols = ARENA_COLS;
@@ -104,14 +104,15 @@ const generateMaze = (level = 2) => {
     }
   }
 
-  // Ensure a small clear area around center so snake can spawn safely
+  // Ensure a deterministic clear corridor around center so snake can spawn safely and have a forward path
   const cx = Math.floor(cols / 2);
   const cz = Math.floor(rows / 2);
-  for (let dz = -1; dz <= 1; dz += 1) {
-    for (let dx = -1; dx <= 1; dx += 1) {
-      const rz = cz + dz;
-      const rx = cx + dx;
-      if (rz > 0 && rz < rows - 1 && rx > 0 && rx < cols - 1) maze[rz][rx] = 0;
+  const backDepth = Math.max(0, (Math.floor(Number(startValue) || 1) - 1));
+  const zStart = Math.max(1, cz - backDepth);
+  const zEnd = Math.min(rows - 2, cz + 5);
+  for (let gz = zStart; gz <= zEnd; gz += 1) {
+    for (let gx = cx - 1; gx <= cx + 1; gx += 1) {
+      if (gz > 0 && gz < rows - 1 && gx > 0 && gx < cols - 1) maze[gz][gx] = 0;
     }
   }
 
@@ -234,20 +235,27 @@ const pickRandomFood = (matrix, snakeSegments = []) => {
   return world;
 };
 
-// initial level and maze
+// initial level
 const initialLevel = 2;
-const initialMaze = generateMaze(initialLevel);
 
-const initialSnake = [
-  { x: 0, y: 0.5, z: 0 },
-  { x: 0, y: 0.5, z: -1 },
-  { x: 0, y: 0.5, z: -2 },
-];
+// helper to build initial snake segments from a startValue (head + bodies behind)
+const buildInitialSnake = (startValue) => {
+  const n = Math.max(1, Math.floor(Number(startValue) || 1));
+  const segs = [];
+  for (let i = 0; i < n; i += 1) {
+    // head at index 0, bodies follow with increasing negative Z
+    segs.push({ x: 0, y: 0.5, z: -i });
+  }
+  return segs;
+};
 
 // deterministic level config (Iteration 6) — imported file
 import level1 from './snakeLevel1.json';
 const DEFAULT_LEVEL_CONFIG = level1 || { id: 'snake-level-1', startValue: 1, foods: [3,2,1,4,2,3,1,2,4,1] };
 const initialLevelConfig = DEFAULT_LEVEL_CONFIG;
+
+// initial maze depends on initial level config startValue
+const initialMaze = generateMaze(initialLevel, (initialLevelConfig && initialLevelConfig.startValue) || 1);
 
 // helper to convert world snake segments to grid keys
 const snakeToGridSet = (segments, matrix) => {
@@ -259,7 +267,9 @@ const snakeToGridSet = (segments, matrix) => {
 };
 
 export const useGameStore = create((set) => ({
-  snakeSegments: initialSnake.map((s) => ({ ...s })),
+  // authoritative numeric value represented by the head Numberblock; initial from level config
+  currentValue: (initialLevelConfig && initialLevelConfig.startValue) || 1,
+  snakeSegments: buildInitialSnake((initialLevelConfig && initialLevelConfig.startValue) || 1).map((s) => ({ ...s })),
   score: 0,
   elapsedTime: 0,
   highScore: readNumber(HIGH_SCORE_KEY, 0),
@@ -270,22 +280,27 @@ export const useGameStore = create((set) => ({
   levelConfig: initialLevelConfig,
   currentFoodIndex: 0,
   currentFoodValue: (initialLevelConfig && initialLevelConfig.foods && initialLevelConfig.foods[0]) || null,
-  foodPosition: pickRandomFood(initialMaze, initialSnake),
+  foodPosition: pickRandomFood(initialMaze, buildInitialSnake((initialLevelConfig && initialLevelConfig.startValue) || 1)),
   selectedSkin: initialSkin,
 
   setGameState: (gameState) => set({ gameState }),
 
   startGame: () =>
-    set((state) => ({
-      gameState: 'playing',
-      score: 0,
-      elapsedTime: 0,
-      snakeSegments: initialSnake.map((s) => ({ ...s })),
-      // reset deterministic sequence
-      currentFoodIndex: 0,
-      currentFoodValue: (state.levelConfig && state.levelConfig.foods && state.levelConfig.foods[0]) || null,
-      foodPosition: pickRandomFood(state.mazeMatrix || initialMaze, initialSnake),
-    })),
+    set((state) => {
+      const startValue = (state.levelConfig && state.levelConfig.startValue) || 1;
+      const initial = buildInitialSnake(startValue).map((s) => ({ ...s }));
+      return {
+        gameState: 'playing',
+        score: 0,
+        elapsedTime: 0,
+        snakeSegments: initial,
+        currentValue: startValue,
+        // reset deterministic sequence
+        currentFoodIndex: 0,
+        currentFoodValue: (state.levelConfig && state.levelConfig.foods && state.levelConfig.foods[0]) || null,
+        foodPosition: pickRandomFood(state.mazeMatrix || initialMaze, initial),
+      };
+    }),
 
 
   gameOver: () =>
@@ -323,12 +338,20 @@ export const useGameStore = create((set) => ({
       const best = Math.max(state.highScore, nextScore);
       if (best !== state.highScore) writeStorage(HIGH_SCORE_KEY, best);
 
+      // eaten food value
+      const eatenValue = typeof state.currentFoodValue === 'number' ? state.currentFoodValue : 0;
+
       // Use provided growth position (logical tail world position) or fallback to last segment
       const fallback = state.snakeSegments[state.snakeSegments.length - 1] ?? { x: 0, y: 0.5, z: 0 };
       const tailPos = growthPosition && typeof growthPosition.x === 'number' ? growthPosition : fallback;
 
-      // grow snake by appending the provided tail position
-      const grown = [...state.snakeSegments, { ...tailPos }];
+      // grow snake by appending eatenValue copies of the tail position
+      const grown = [...state.snakeSegments];
+      for (let i = 0; i < eatenValue; i += 1) grown.push({ ...tailPos });
+
+      // compute new currentValue as accumulated numeric head value
+      const current = typeof state.currentValue === 'number' ? state.currentValue : ((state.levelConfig && state.levelConfig.startValue) || 1);
+      const nextValue = current + eatenValue;
 
       // Advance deterministic food sequence
       const level = state.levelConfig || initialLevelConfig;
@@ -337,15 +360,16 @@ export const useGameStore = create((set) => ({
 
       // If nextIndex is within bounds, set next active food and attempt to spawn position
       if (nextIndex < foods.length) {
-        const nextValue = foods[nextIndex];
+        const nextFoodVal = foods[nextIndex];
         const newFoodPos = pickRandomFood(state.mazeMatrix, grown);
         return {
           score: nextScore,
           highScore: best,
           snakeSegments: grown,
+          currentValue: nextValue,
           foodPosition: newFoodPos,
           currentFoodIndex: nextIndex,
-          currentFoodValue: nextValue,
+          currentFoodValue: nextFoodVal,
         };
       }
 
@@ -354,6 +378,7 @@ export const useGameStore = create((set) => ({
         score: nextScore,
         highScore: best,
         snakeSegments: grown,
+        currentValue: nextValue,
         foodPosition: null,
         gameState: 'complete',
       };
@@ -361,12 +386,16 @@ export const useGameStore = create((set) => ({
 
   setLevel: (level) => set((state) => {
       const lvl = Math.max(0, Math.min(10, Number(level)));
-      const m = generateMaze(lvl);
+      const cfg = state.levelConfig || initialLevelConfig;
+      const startValue = (cfg && cfg.startValue) || 1;
+      const m = generateMaze(lvl, startValue);
+      const initial = buildInitialSnake(startValue).map((s) => ({ ...s }));
       return {
         currentLevel: lvl,
         mazeMatrix: m,
-        snakeSegments: initialSnake.map((s) => ({ ...s })),
-        foodPosition: pickRandomFood(m, initialSnake.map(s => ({ x: s.x, z: s.z }))),
+        snakeSegments: initial,
+        currentValue: startValue,
+        foodPosition: pickRandomFood(m, initial),
         gameState: 'idle',
         score: 0,
         elapsedTime: 0,
@@ -380,5 +409,21 @@ export const useGameStore = create((set) => ({
       return { selectedSkin: skinKey };
     }),
 
-  regenerateMaze: () => set((state) => ({ mazeMatrix: generateMaze(state.currentLevel) })),
+  regenerateMaze: () => set((state) => {
+    const cfg = state.levelConfig || initialLevelConfig;
+    const startValue = (cfg && cfg.startValue) || 1;
+    const m = generateMaze(state.currentLevel, startValue);
+    const initial = buildInitialSnake(startValue).map((s) => ({ ...s }));
+    return {
+      mazeMatrix: m,
+      snakeSegments: initial,
+      currentValue: startValue,
+      currentFoodIndex: 0,
+      currentFoodValue: (cfg && cfg.foods && cfg.foods[0]) || null,
+      foodPosition: pickRandomFood(m, initial),
+      gameState: 'idle',
+      score: 0,
+      elapsedTime: 0,
+    };
+  }),
 }));
