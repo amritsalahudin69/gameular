@@ -53,6 +53,9 @@ function Hud() {
           display: 'flex',
           gap: 8,
           alignItems: 'center',
+          flexWrap: 'wrap',
+          maxWidth: '48vw',
+          justifyContent: 'flex-end',
         }}
       >
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -299,9 +302,18 @@ export default function App() {
         onPointerDown={onCanvasPointerDown}
         onPointerUp={onCanvasPointerUp}
         onPointerCancel={onCanvasPointerCancel}
-        style={{ position: 'relative', touchAction: 'none' }}
+        style={{
+          position: 'fixed',
+          inset: 0,
+          width: '100vw',
+          height: '100dvh',
+          overflow: 'hidden',
+          touchAction: 'none',
+          WebkitOverflowScrolling: 'auto',
+        }}
       >
         <Canvas
+          style={{ width: '100%', height: '100%' }}
           shadows
           gl={{ alpha: false, antialias: false, powerPreference: 'high-performance' }}
           camera={{ fov: 55, near: 0.1, far: 100, position: [0, 7.5, 8.5] }}
