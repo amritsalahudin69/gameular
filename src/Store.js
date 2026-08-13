@@ -215,8 +215,15 @@ const pickRandomFood = (matrix, snakeSegments = []) => {
   return world;
 };
 
-// initial level
-const initialLevel = 2;
+// deterministic level config (Iteration 6) — imported file
+import level1 from './snakeLevel1.json';
+const DEFAULT_LEVEL_CONFIG = level1 || { id: 'snake-level-1', startValue: 1, foods: [3,2,1,4,2,3,1,2,4,1] };
+const initialLevelConfig = DEFAULT_LEVEL_CONFIG;
+
+// initial level — read from level config (fallback 2)
+const initialLevel = (initialLevelConfig && initialLevelConfig.maze && Number.isFinite(Number(initialLevelConfig.maze.level)))
+  ? Math.max(0, Math.min(10, Math.floor(Number(initialLevelConfig.maze.level))))
+  : 2;
 
 // helper to build initial snake segments from a startValue (head + bodies behind)
 const buildInitialSnake = (startValue) => {
@@ -228,11 +235,6 @@ const buildInitialSnake = (startValue) => {
   }
   return segs;
 };
-
-// deterministic level config (Iteration 6) — imported file
-import level1 from './snakeLevel1.json';
-const DEFAULT_LEVEL_CONFIG = level1 || { id: 'snake-level-1', startValue: 1, foods: [3,2,1,4,2,3,1,2,4,1] };
-const initialLevelConfig = DEFAULT_LEVEL_CONFIG;
 
 // initial maze depends on initial level config startValue
 const initialMaze = generateMaze(initialLevel, (initialLevelConfig && initialLevelConfig.startValue) || 1);

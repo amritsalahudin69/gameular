@@ -65,12 +65,19 @@ const loadNumberblockTexture = (value, onLoaded) => {
   );
 };
 
-const MOVE_SPEED = 4.8;
 const STEP_INTERVAL = 0.18; // logical movement tick
 const CAMERA_BASE = new THREE.Vector3(0, 7.5, 8.5);
 
 function Map() {
   const mazeMatrix = useGameStore((s) => s.mazeMatrix);
+  const levelConfig = useGameStore((s) => s.levelConfig);
+
+  // color config with safe fallbacks and trimming
+  const rawFloor = levelConfig && levelConfig.visual && levelConfig.visual.floorColor;
+  const rawWall = levelConfig && levelConfig.visual && levelConfig.visual.wallColor;
+  const floorColor = typeof rawFloor === 'string' ? rawFloor.trim() || '#24312f' : '#24312f';
+  const wallColor = typeof rawWall === 'string' ? rawWall.trim() || '#5a7367' : '#5a7367';
+
   const instances = useMemo(() => {
     const rows = mazeMatrix.length;
     const cols = mazeMatrix[0].length;
@@ -100,13 +107,13 @@ function Map() {
     <group>
       <mesh receiveShadow position={[0, -0.01, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[cols, rows]} />
-        <meshStandardMaterial color="#24312f" roughness={0.95} metalness={0.05} />
+        <meshStandardMaterial color={floorColor} roughness={0.95} metalness={0.05} />
       </mesh>
 
       <InstancedRigidBodies instances={instances.data} type="fixed" colliders="cuboid">
         <instancedMesh castShadow receiveShadow args={[null, null, instances.data.length]}>
           <boxGeometry args={[1, 1, 1]} />
-          <meshStandardMaterial color="#5a7367" roughness={0.8} metalness={0.08} />
+          <meshStandardMaterial color={wallColor} roughness={0.8} metalness={0.08} />
         </instancedMesh>
       </InstancedRigidBodies>
     </group>
@@ -182,7 +189,12 @@ function Player() {
   const setElapsedTime = useGameStore((s) => s.setElapsedTime);
   const mazeMatrix = useGameStore((s) => s.mazeMatrix);
   const levelConfig = useGameStore((s) => s.levelConfig);
-  const stepInterval = (levelConfig && levelConfig.stepIntervalSec) || STEP_INTERVAL;
+  // canonical speed source: gameplay.stepIntervalSec -> legacy stepIntervalSec -> fallback
+  const configured = levelConfig && levelConfig.gameplay && levelConfig.gameplay.stepIntervalSec;
+  const legacy = levelConfig && levelConfig.stepIntervalSec;
+  const stepInterval = Number.isFinite(configured) && configured > 0
+    ? configured
+    : (Number.isFinite(legacy) && legacy > 0 ? legacy : STEP_INTERVAL);
   const [, getKeys] = useKeyboardControls();
   const { camera } = useThree();
   const skin = SKIN_PRESETS[selectedSkin] ?? SKIN_PRESETS.classic;

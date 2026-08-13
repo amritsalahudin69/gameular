@@ -1,11 +1,23 @@
 {
   "id": "snake-level-1",
+
   "startValue": 1,
-  "stepIntervalSec": 0.18,
+
+  "foods": [3, 2, 1, 4, 2, 3, 1, 2, 4, 1],
+
+  "gameplay": {
+    "stepIntervalSec": 0.18
+  },
+
   "visual": {
     "headScale": 1.0,
     "bodyScale": 0.42,
-    "foodScale": 0.9
+    "foodScale": 0.9,
+    "floorColor": "#24312f",
+    "wallColor": "#5a7367"
   },
-  "foods": [3, 2, 1, 4, 2, 3, 1, 2, 4, 1]
+
+  "maze": {
+    "level": 2
+  }
 }
