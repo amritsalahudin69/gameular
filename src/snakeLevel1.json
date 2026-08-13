@@ -2,5 +2,10 @@
   "id": "snake-level-1",
   "startValue": 1,
   "stepIntervalSec": 0.18,
+  "visual": {
+    "headScale": 1.0,
+    "bodyScale": 0.42,
+    "foodScale": 0.9
+  },
   "foods": [3, 2, 1, 4, 2, 3, 1, 2, 4, 1]
 }

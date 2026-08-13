@@ -116,6 +116,8 @@ function Map() {
 function Food() {
   const foodPosition = useGameStore((s) => s.foodPosition);
   const currentFoodValue = useGameStore((s) => s.currentFoodValue);
+  const levelConfig = useGameStore((s) => s.levelConfig);
+  const foodScale = (levelConfig && levelConfig.visual && typeof levelConfig.visual.foodScale === 'number') ? levelConfig.visual.foodScale : 0.9;
 
   // texture state per food value
   const texRef = useRef(null);
@@ -146,7 +148,7 @@ function Food() {
       <CuboidCollider args={[0.3, 0.3, 0.3]} sensor />
 
       {texState ? (
-        <sprite position={[0, 0, 0]} scale={[0.9, 0.9, 1]}> 
+        <sprite position={[0, 0, 0]} scale={[foodScale, foodScale, 1]}> 
           <spriteMaterial attach="material" map={texState} transparent />
         </sprite>
       ) : (
@@ -196,6 +198,10 @@ function Player() {
   const currentValue = useGameStore((s) => s.currentValue);
   const headTexRef = useRef(null);
   const [headTex, setHeadTex] = useState(null);
+
+  // visual scales from level config with safe fallbacks
+  const headScale = (levelConfig && levelConfig.visual && typeof levelConfig.visual.headScale === 'number') ? levelConfig.visual.headScale : 1.0;
+  const bodyScale = (levelConfig && levelConfig.visual && typeof levelConfig.visual.bodyScale === 'number') ? levelConfig.visual.bodyScale : 0.42;
 
   useEffect(() => {
     let mounted = true;
@@ -434,7 +440,8 @@ function Player() {
             gridHistoryRef.current.push({ gx: growthGrid.gx, gz: growthGrid.gz });
           }
           // stabilize new-tail visuals at the first appended index
-          newTailHoldRef.current = { index: oldLength, gx: growthGrid.gx, gz: growthGrid.gz };
+          // segmentRefs contains body-only entries, so the body index for the new tail is oldLength - 1
+          newTailHoldRef.current = { index: Math.max(0, oldLength - 1), gx: growthGrid.gx, gz: growthGrid.gz };
         }
 
         // consume exactly once per logical tick, providing authoritative growth world position
@@ -493,7 +500,7 @@ function Player() {
         <CuboidCollider args={[0.38, 0.38, 0.38]} />
           {/* Head: use Numberblock sprite as primary when available, otherwise fallback to cube */}
           {headTex ? (
-            <sprite position={[0, 0, 0]} scale={[1.0, 1.0, 1]}> 
+            <sprite position={[0, 0, 0]} scale={[headScale, headScale, 1]}> 
               <spriteMaterial attach="material" map={headTex} transparent />
             </sprite>
           ) : (
@@ -505,17 +512,22 @@ function Player() {
       </RigidBody>
 
       {Array.from({ length: Math.max(0, segmentCount) }).map((_, i) => (
-        <mesh
+        <group
           key={`segment-${i}`}
-          ref={(el) => {
-            segmentRefs.current[i] = el;
-          }}
+          ref={(el) => { segmentRefs.current[i] = el; }}
           position={[0, 0.5, -(i + 1) * 0.7]}
-          castShadow
         >
-          <sphereGeometry args={[0.3, 14, 14]} />
-          <meshStandardMaterial color={skin.bodyColor} roughness={0.5} metalness={0.1} />
-        </mesh>
+          {headTex ? (
+            <sprite position={[0, 0, 0]} scale={[bodyScale, bodyScale, 1]}> 
+              <spriteMaterial attach="material" map={headTex} transparent />
+            </sprite>
+          ) : (
+            <mesh castShadow>
+              <sphereGeometry args={[0.3, 14, 14]} />
+              <meshStandardMaterial color={skin.bodyColor} roughness={0.5} metalness={0.1} />
+            </mesh>
+          )}
+        </group>
       ))}
     </group>
   );

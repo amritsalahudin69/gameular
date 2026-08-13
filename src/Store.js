@@ -375,6 +375,9 @@ export const useGameStore = create((set) => ({
         mazeMatrix: m,
         snakeSegments: initial,
         currentValue: startValue,
+        // reset deterministic food sequence
+        currentFoodIndex: 0,
+        currentFoodValue: (cfg && cfg.foods && cfg.foods[0]) || null,
         foodPosition: pickRandomFood(m, initial),
         gameState: 'idle',
         score: 0,
