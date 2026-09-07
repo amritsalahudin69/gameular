@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 
 const FOOD_Y = 0.4;
+export const MERGE_FEEDBACK_MS = 420;
 const HIGH_SCORE_KEY = 'maze_snake_high_score';
 const SKIN_KEY = 'maze_snake_skin';
 
@@ -157,7 +158,9 @@ const getWalkableFromMatrix = (matrix) => {
   return cells;
 };
 
-const pickRandomFood = (matrix, snakeSegments = []) => {
+const positionKey = (position) => (position ? `${position.gx},${position.gz}` : null);
+
+const pickRandomFood = (matrix, playerPosition = null, blockedPosition = null) => {
   // Defensive checks
   if (!matrix || !matrix.length || !matrix[0]) return null;
   const rows = matrix.length;
@@ -165,17 +168,13 @@ const pickRandomFood = (matrix, snakeSegments = []) => {
   const ox = (cols - 1) / 2;
   const oz = (rows - 1) / 2;
 
-  // convert snake segments (world) to occupied grid keys
-  const snakeSet = new Set((snakeSegments || []).map((s) => {
-    const gx = Math.round((s.gx ?? Math.round(s.x + ox)));
-    const gz = Math.round((s.gz ?? Math.round(s.z + oz)));
-    return `${gx},${gz}`;
-  }));
-
-  // Determine head position as BFS start (use first snake segment if present)
-  const head = (snakeSegments && snakeSegments[0]) || null;
-  const headGX = head ? Math.round((head.gx ?? Math.round(head.x + ox))) : Math.floor(cols / 2);
-  const headGZ = head ? Math.round((head.gz ?? Math.round(head.z + oz))) : Math.floor(rows / 2);
+  // Determine reachable cells from the player's authoritative position.
+  const headGX = playerPosition
+    ? Math.round((playerPosition.gx ?? playerPosition.x + ox))
+    : Math.floor(cols / 2);
+  const headGZ = playerPosition
+    ? Math.round((playerPosition.gz ?? playerPosition.z + oz))
+    : Math.floor(rows / 2);
 
   // BFS to collect reachable walkable cells (orthogonal neighbors only)
   const inBounds = (gx, gz) => gx >= 0 && gz >= 0 && gx < cols && gz < rows;
@@ -202,8 +201,13 @@ const pickRandomFood = (matrix, snakeSegments = []) => {
     }
   }
 
-  // From reachable cells exclude snake-occupied cells
-  const candidates = reachable.filter((c) => !snakeSet.has(key(c.gx, c.gz)));
+  // The only occupied gameplay cell is the player's current cell.
+  const playerKey = key(headGX, headGZ);
+  const blockedKey = positionKey(blockedPosition);
+  const candidates = reachable.filter((c) => {
+    const cellKey = key(c.gx, c.gz);
+    return cellKey !== playerKey && cellKey !== blockedKey;
+  });
 
   if (!candidates.length) {
     // no valid cell reachable and unoccupied
@@ -215,19 +219,29 @@ const pickRandomFood = (matrix, snakeSegments = []) => {
   return world;
 };
 
+const pickEnemySpawn = (matrix, playerPosition, foodPosition) => {
+  const ox = (matrix[0].length - 1) / 2;
+  const oz = (matrix.length - 1) / 2;
+  const playerGX = Math.round(playerPosition.gx ?? playerPosition.x + ox);
+  const playerGZ = Math.round(playerPosition.gz ?? playerPosition.z + oz);
+  const cells = getWalkableFromMatrix(matrix).filter((cell) => {
+    const samePlayer = cell.gx === playerGX && cell.gz === playerGZ;
+    const sameFood = foodPosition && cell.gx === foodPosition.gx && cell.gz === foodPosition.gz;
+    return !samePlayer && !sameFood;
+  });
+  if (!cells.length) return null;
+
+  const distant = cells.filter((cell) => (
+    Math.abs(cell.gx - playerGX) + Math.abs(cell.gz - playerGZ) >= 6
+  ));
+  const pool = distant.length ? distant : cells;
+  return pool[Math.floor(Math.random() * pool.length)];
+};
+
 // initial level
 const initialLevel = 2;
 
-// helper to build initial snake segments from a startValue (head + bodies behind)
-const buildInitialSnake = (startValue) => {
-  const n = Math.max(1, Math.floor(Number(startValue) || 1));
-  const segs = [];
-  for (let i = 0; i < n; i += 1) {
-    // head at index 0, bodies follow with increasing negative Z
-    segs.push({ x: 0, y: 0.5, z: -i });
-  }
-  return segs;
-};
+const INITIAL_PLAYER_POSITION = { x: 0, y: 0.5, z: 0 };
 
 // deterministic level config (Iteration 6) — imported file
 import level1 from './snakeLevel1.json';
@@ -236,20 +250,12 @@ const initialLevelConfig = DEFAULT_LEVEL_CONFIG;
 
 // initial maze depends on initial level config startValue
 const initialMaze = generateMaze(initialLevel, (initialLevelConfig && initialLevelConfig.startValue) || 1);
-
-// helper to convert world snake segments to grid keys
-const snakeToGridSet = (segments, matrix) => {
-  const rows = matrix.length;
-  const cols = matrix[0].length;
-  const ox = (cols - 1) / 2;
-  const oz = (rows - 1) / 2;
-  return new Set((segments || []).map(s => `${Math.round(s.x + ox)},${Math.round(s.z + oz)}`));
-};
+const initialFoodPosition = pickRandomFood(initialMaze, INITIAL_PLAYER_POSITION);
 
 export const useGameStore = create((set) => ({
   // authoritative numeric value represented by the head Numberblock; initial from level config
   currentValue: (initialLevelConfig && initialLevelConfig.startValue) || 1,
-  snakeSegments: buildInitialSnake((initialLevelConfig && initialLevelConfig.startValue) || 1).map((s) => ({ ...s })),
+  playerPosition: { ...INITIAL_PLAYER_POSITION },
   score: 0,
   elapsedTime: 0,
   highScore: readNumber(HIGH_SCORE_KEY, 0),
@@ -260,7 +266,10 @@ export const useGameStore = create((set) => ({
   levelConfig: initialLevelConfig,
   currentFoodIndex: 0,
   currentFoodValue: (initialLevelConfig && initialLevelConfig.foods && initialLevelConfig.foods[0]) || null,
-  foodPosition: pickRandomFood(initialMaze, buildInitialSnake((initialLevelConfig && initialLevelConfig.startValue) || 1)),
+  foodPosition: initialFoodPosition,
+  enemyPosition: pickEnemySpawn(initialMaze, INITIAL_PLAYER_POSITION, initialFoodPosition),
+  enemyActive: true,
+  mergeFeedback: null,
   selectedSkin: initialSkin,
 
   setGameState: (gameState) => set({ gameState }),
@@ -268,17 +277,25 @@ export const useGameStore = create((set) => ({
   startGame: () =>
     set((state) => {
       const startValue = (state.levelConfig && state.levelConfig.startValue) || 1;
-      const initial = buildInitialSnake(startValue).map((s) => ({ ...s }));
       return {
         gameState: 'playing',
         score: 0,
         elapsedTime: 0,
-        snakeSegments: initial,
+        playerPosition: { ...INITIAL_PLAYER_POSITION },
         currentValue: startValue,
         // reset deterministic sequence
         currentFoodIndex: 0,
         currentFoodValue: (state.levelConfig && state.levelConfig.foods && state.levelConfig.foods[0]) || null,
-        foodPosition: pickRandomFood(state.mazeMatrix || initialMaze, initial),
+        ...(() => {
+          const matrix = state.mazeMatrix || initialMaze;
+          const nextFood = pickRandomFood(matrix, INITIAL_PLAYER_POSITION);
+          return {
+            foodPosition: nextFood,
+            enemyPosition: pickEnemySpawn(matrix, INITIAL_PLAYER_POSITION, nextFood),
+            enemyActive: true,
+          };
+        })(),
+        mergeFeedback: null,
       };
     }),
 
@@ -291,6 +308,8 @@ export const useGameStore = create((set) => ({
       return {
         gameState: 'gameover',
         highScore: best,
+        enemyActive: false,
+        mergeFeedback: null,
       };
     }),
 
@@ -300,20 +319,12 @@ export const useGameStore = create((set) => ({
       return { elapsedTime };
     }),
 
-  syncSnakeSegments: (segments) =>
-    set((state) => {
-      // Preserve any extra tail segments that were added (growth) so they aren't overwritten
-      const current = state.snakeSegments || [];
-      if (segments.length < current.length) {
-        const tail = current.slice(segments.length);
-        return { snakeSegments: [...segments, ...tail] };
-      }
-      return { snakeSegments: segments };
-    }),
+  syncPlayerPosition: (playerPosition) => set({ playerPosition }),
+  syncEnemyPosition: (enemyPosition) => set({ enemyPosition }),
 
-  eatFood: (growthPosition) =>
+  beginFoodMerge: () =>
     set((state) => {
-      if (state.gameState !== 'playing') return state;
+      if (state.gameState !== 'playing' || state.mergeFeedback) return state;
       const nextScore = state.score + 1;
       const best = Math.max(state.highScore, nextScore);
       if (best !== state.highScore) writeStorage(HIGH_SCORE_KEY, best);
@@ -321,46 +332,51 @@ export const useGameStore = create((set) => ({
       // eaten food value
       const eatenValue = typeof state.currentFoodValue === 'number' ? state.currentFoodValue : 0;
 
-      // Use provided growth position (logical tail world position) or fallback to last segment
-      const fallback = state.snakeSegments[state.snakeSegments.length - 1] ?? { x: 0, y: 0.5, z: 0 };
-      const tailPos = growthPosition && typeof growthPosition.x === 'number' ? growthPosition : fallback;
-
-      // grow snake by appending eatenValue copies of the tail position
-      const grown = [...state.snakeSegments];
-      for (let i = 0; i < eatenValue; i += 1) grown.push({ ...tailPos });
-
       // compute new currentValue as accumulated numeric head value
       const current = typeof state.currentValue === 'number' ? state.currentValue : ((state.levelConfig && state.levelConfig.startValue) || 1);
-      const nextValue = current + eatenValue;
+      const result = current + eatenValue;
 
       // Advance deterministic food sequence
       const level = state.levelConfig || initialLevelConfig;
       const foods = (level && level.foods) || [];
       const nextIndex = (typeof state.currentFoodIndex === 'number' ? state.currentFoodIndex : 0) + 1;
 
-      // If nextIndex is within bounds, set next active food and attempt to spawn position
-      if (nextIndex < foods.length) {
-        const nextFoodVal = foods[nextIndex];
-        const newFoodPos = pickRandomFood(state.mazeMatrix, grown);
-        return {
-          score: nextScore,
-          highScore: best,
-          snakeSegments: grown,
-          currentValue: nextValue,
-          foodPosition: newFoodPos,
-          currentFoodIndex: nextIndex,
-          currentFoodValue: nextFoodVal,
-        };
-      }
-
-      // No more configured foods — session complete. Do not spawn next food.
       return {
         score: nextScore,
         highScore: best,
-        snakeSegments: grown,
-        currentValue: nextValue,
+        foodPosition: null,
+        mergeFeedback: {
+          result,
+          nextIndex,
+          nextFoodValue: nextIndex < foods.length ? foods[nextIndex] : null,
+        },
+      };
+    }),
+
+  finishFoodMerge: () =>
+    set((state) => {
+      const feedback = state.mergeFeedback;
+      if (!feedback) return state;
+
+      if (feedback.nextIndex < ((state.levelConfig && state.levelConfig.foods) || []).length) {
+        return {
+          currentValue: feedback.result,
+          foodPosition: pickRandomFood(state.mazeMatrix, state.playerPosition, state.enemyPosition),
+          currentFoodIndex: feedback.nextIndex,
+          currentFoodValue: feedback.nextFoodValue,
+          mergeFeedback: null,
+          gameState: 'playing',
+          enemyActive: true,
+        };
+      }
+
+      // No more configured foods — session complete after feedback finishes.
+      return {
+        currentValue: feedback.result,
         foodPosition: null,
         gameState: 'complete',
+        enemyActive: false,
+        mergeFeedback: null,
       };
     }),
 
@@ -369,13 +385,16 @@ export const useGameStore = create((set) => ({
       const cfg = state.levelConfig || initialLevelConfig;
       const startValue = (cfg && cfg.startValue) || 1;
       const m = generateMaze(lvl, startValue);
-      const initial = buildInitialSnake(startValue).map((s) => ({ ...s }));
+      const nextFood = pickRandomFood(m, INITIAL_PLAYER_POSITION);
       return {
         currentLevel: lvl,
         mazeMatrix: m,
-        snakeSegments: initial,
+        playerPosition: { ...INITIAL_PLAYER_POSITION },
         currentValue: startValue,
-        foodPosition: pickRandomFood(m, initial),
+        foodPosition: nextFood,
+        enemyPosition: pickEnemySpawn(m, INITIAL_PLAYER_POSITION, nextFood),
+        enemyActive: true,
+        mergeFeedback: null,
         gameState: 'idle',
         score: 0,
         elapsedTime: 0,
@@ -393,14 +412,17 @@ export const useGameStore = create((set) => ({
     const cfg = state.levelConfig || initialLevelConfig;
     const startValue = (cfg && cfg.startValue) || 1;
     const m = generateMaze(state.currentLevel, startValue);
-    const initial = buildInitialSnake(startValue).map((s) => ({ ...s }));
+    const nextFood = pickRandomFood(m, INITIAL_PLAYER_POSITION);
     return {
       mazeMatrix: m,
-      snakeSegments: initial,
+      playerPosition: { ...INITIAL_PLAYER_POSITION },
       currentValue: startValue,
       currentFoodIndex: 0,
       currentFoodValue: (cfg && cfg.foods && cfg.foods[0]) || null,
-      foodPosition: pickRandomFood(m, initial),
+      foodPosition: nextFood,
+      enemyPosition: pickEnemySpawn(m, INITIAL_PLAYER_POSITION, nextFood),
+      enemyActive: true,
+      mergeFeedback: null,
       gameState: 'idle',
       score: 0,
       elapsedTime: 0,

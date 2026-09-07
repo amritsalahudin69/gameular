@@ -9,6 +9,7 @@ import {
 } from '@react-three/rapier';
 import * as THREE from 'three';
 import { SKIN_PRESETS, useGameStore } from './Store';
+import Enemy from './Enemy.jsx';
 
 // Simple texture cache and loader for Numberblocks PNGs.
 // textureCache: key -> THREE.Texture | null (failed)
@@ -161,8 +162,6 @@ function Food() {
 
 function Player() {
   const bodyRef = useRef(null);
-  const segmentRefs = useRef([]);
-  const gridHistoryRef = useRef([]); // array of {gx,gz}
   const tickRef = useRef(0);
   const elapsedRef = useRef(0);
   const elapsedSyncRef = useRef(0);
@@ -171,10 +170,8 @@ function Player() {
   const prevGridRef = useRef({ gx: 0, gz: 0 });
   const curGridRef = useRef({ gx: 0, gz: 0 });
   const interpRef = useRef(1);
-  const newTailHoldRef = useRef(null); // { index, gx, gz } to stabilize new-tail visuals for one interval
-
-  const segmentCount = useGameStore((s) => Math.max(0, s.snakeSegments.length - 1));
   const gameState = useGameStore((s) => s.gameState);
+  const mergeFeedback = useGameStore((s) => s.mergeFeedback);
   const gameOver = useGameStore((s) => s.gameOver);
   const selectedSkin = useGameStore((s) => s.selectedSkin);
   const setElapsedTime = useGameStore((s) => s.setElapsedTime);
@@ -222,46 +219,38 @@ function Player() {
     elapsedSyncRef.current = 0;
     dirRef.current = { x: 0, z: 1 }; // initial committed direction
     pendingDirRef.current = null;
-    newTailHoldRef.current = null;
 
-    // Initialize grid positions from current stored snake segments (head first)
-    const snake = useGameStore.getState().snakeSegments || [];
-    const headWorld = snake[0] ?? { x: 0, y: 0.5, z: 0 };
+    const headWorld = useGameStore.getState().playerPosition ?? { x: 0, y: 0.5, z: 0 };
     const headGX = Math.round(headWorld.x + ox);
     const headGZ = Math.round(headWorld.z + oz);
 
-    // Build full initial history: head, body1, body2, ... in grid coords
-    const initialHistory = snake.map((s) => ({ gx: Math.round(s.x + ox), gz: Math.round(s.z + oz) }));
-    // Ensure at least head exists
-    if (initialHistory.length === 0) initialHistory.push({ gx: headGX, gz: headGZ });
-
-    prevGridRef.current = { ...initialHistory[0] };
-    curGridRef.current = { ...initialHistory[0] };
+    prevGridRef.current = { gx: headGX, gz: headGZ };
+    curGridRef.current = { gx: headGX, gz: headGZ };
     interpRef.current = 1;
-    gridHistoryRef.current = initialHistory.slice();
-
-    // Place visual segments exactly on their logical grid cells
-    segmentRefs.current.forEach((segment, i) => {
-      if (!segment) return;
-      const hist = gridHistoryRef.current[i + 1] ?? { gx: headGX, gz: headGZ - (i + 1) };
-      const p = gridToWorld(hist.gx, hist.gz);
-      segment.position.set(p.x, p.y, p.z);
-    });
 
     bodyRef.current?.setNextKinematicTranslation(gridToWorld(headGX, headGZ));
     camera.position.copy(CAMERA_BASE);
     camera.lookAt(0, 0.5, 0);
   }, [camera, gameState, mazeMatrix]);
 
-  // keep segmentRefs trimmed to authoritative active count to avoid stale indexes
-  useEffect(() => {
-    segmentRefs.current.length = segmentCount;
-  }, [segmentCount]);
-
   // keyboard fallback — enqueue at most one pending direction per logical tick
   useEffect(() => {
+    const queueDirection = (direction) => {
+      if (gameState !== 'playing' || mergeFeedback || !direction) return;
+
+      const { x: dx, z: dz } = direction;
+      const committed = dirRef.current;
+      // Reject direct reversal against the committed direction.
+      if (dx === -committed.x && dz === -committed.z) return;
+      // Ignore repeated requests for the current direction.
+      if (dx === committed.x && dz === committed.z) return;
+      // Keep one pending change per logical tick across all input sources.
+      if (pendingDirRef.current) return;
+
+      pendingDirRef.current = { x: dx, z: dz };
+    };
+
     const onKey = (e) => {
-      if (gameState !== 'playing') return;
       const code = e.code;
       let dx = 0;
       let dz = 0;
@@ -273,31 +262,62 @@ function Player() {
 
       // prevent page scrolling while playing for arrow keys
       if (code.startsWith('Arrow')) e.preventDefault();
+      queueDirection({ x: dx, z: dz });
+    };
 
-      const committed = dirRef.current;
-      // reject direct reversal against the committed direction
-      if (dx === -committed.x && dz === -committed.z) return;
-      // ignore if identical to committed
-      if (dx === committed.x && dz === committed.z) return;
-      // allow only one pending change before next logical tick
-      if (pendingDirRef.current) return;
+    const onDirection = (e) => {
+      queueDirection(e.detail);
+    };
 
-      pendingDirRef.current = { x: dx, z: dz };
+    let swipeStart = null;
+    const onTouchStart = (e) => {
+      if (gameState !== 'playing' || mergeFeedback || e.touches.length !== 1) return;
+      const target = e.target;
+      if (target instanceof Element && target.closest('[data-dpad]')) return;
+      const touch = e.touches[0];
+      swipeStart = { id: touch.identifier, x: touch.clientX, y: touch.clientY };
+    };
+
+    const onTouchEnd = (e) => {
+      if (!swipeStart) return;
+      const touch = Array.from(e.changedTouches).find(({ identifier }) => identifier === swipeStart.id);
+      const start = swipeStart;
+      swipeStart = null;
+      if (!touch) return;
+
+      const dx = touch.clientX - start.x;
+      const dy = touch.clientY - start.y;
+      const distance = Math.hypot(dx, dy);
+      if (distance < 30) return;
+
+      if (Math.abs(dx) > Math.abs(dy)) {
+        queueDirection({ x: dx > 0 ? 1 : -1, z: 0 });
+      } else {
+        queueDirection({ x: 0, z: dy > 0 ? 1 : -1 });
+      }
     };
 
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [gameState]);
+    window.addEventListener('game-direction', onDirection);
+    window.addEventListener('touchstart', onTouchStart, { passive: true });
+    window.addEventListener('touchend', onTouchEnd, { passive: true });
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('game-direction', onDirection);
+      window.removeEventListener('touchstart', onTouchStart);
+      window.removeEventListener('touchend', onTouchEnd);
+    };
+  }, [gameState, mergeFeedback]);
 
   useFrame((_, delta) => {
     const rb = bodyRef.current;
-    if (!rb || gameState !== 'playing') return;
+    if (!rb || gameState !== 'playing' || mergeFeedback) return;
 
     // tiny diagnostic helper to report why a logical game over occurred
     const reportGameOver = (reason, details = {}) => {
       // Emit a deterministic console warning with structured details
       // eslint-disable-next-line no-console
-      console.warn('[SNAKE_GAME_OVER]', { reason, ...details });
+      console.warn('[GAME_OVER]', { reason, ...details });
       gameOver();
     };
 
@@ -315,9 +335,6 @@ function Player() {
     while (tickRef.current >= stepInterval) {
       // consume the interval but keep remainder
       tickRef.current -= stepInterval;
-
-      // clear any previous new-tail hold now that a new interval starts
-      newTailHoldRef.current = null;
 
       // commit pending direction (if any) once per tick before movement calculation
       if (pendingDirRef.current) {
@@ -338,7 +355,7 @@ function Player() {
 
       // Validate candidate BEFORE mutating any runtime/grid state
       if (!isInsideMaze(candidateGX, candidateGZ)) {
-        // Outside arena -> game over. Do not mutate any refs or history.
+        // Outside arena -> game over. Do not mutate authoritative position.
         reportGameOver('BOUNDARY', {
           currentGX: curGridRef.current.gx,
           currentGZ: curGridRef.current.gz,
@@ -352,7 +369,7 @@ function Player() {
 
       // Safe to index mazeMatrix now because candidate is inside bounds
       if (mazeMatrix[candidateGZ][candidateGX] === 1) {
-        // Wall cell -> game over. Do not mutate any refs or history.
+        // Wall cell -> game over. Do not mutate authoritative position.
         reportGameOver('WALL', {
           currentGX: curGridRef.current.gx,
           currentGZ: curGridRef.current.gz,
@@ -363,82 +380,23 @@ function Player() {
         return;
       }
 
-      // Self-collision check (grid-based) — exclude the current tail cell which will vacate this tick
-      const snakeLen = (useGameStore.getState().snakeSegments || []).length;
-      // collision cells are history[1] .. history[snakeLen - 2] inclusive
-      const collisionEnd = snakeLen - 2;
-      if (collisionEnd >= 1) {
-        for (let i = 1; i <= collisionEnd; i += 1) {
-          const h = gridHistoryRef.current[i];
-          if (!h) continue;
-          if (h.gx === candidateGX && h.gz === candidateGZ) {
-            // collided with body (not tail) -> game over
-            reportGameOver('SELF', {
-              currentGX: curGridRef.current.gx,
-              currentGZ: curGridRef.current.gz,
-              candidateGX,
-              candidateGZ,
-              collisionHistoryIndex: i,
-              snakeLength: snakeLen,
-            });
-            return;
-          }
-        }
-      }
-
-      // Candidate valid and not colliding: commit movement
-      // advance grid
+      // Candidate is valid: commit the authoritative single-cell movement.
       prevGridRef.current = { ...curGridRef.current };
       curGridRef.current = { gx: candidateGX, gz: candidateGZ };
-
-      // reset interpolation fraction for the new step; the visual fraction will be recomputed below from the accumulator
       interpRef.current = 0;
+      const playerWorld = gridToWorld(candidateGX, candidateGZ);
+      useGameStore.getState().syncPlayerPosition(playerWorld);
 
-      // push to history (head first)
-      gridHistoryRef.current.unshift({ gx: candidateGX, gz: candidateGZ });
-
-      // trim history deterministically to needed length (segments + margin)
-      const keep = segmentCount + 5;
-      if (gridHistoryRef.current.length > keep) gridHistoryRef.current.length = keep;
-
-      // prepare segments positions for store sync using grid-derived positions (authoritative)
-      const syncCount = segmentCount + 1; // head + bodies
-      const syncGrid = gridHistoryRef.current.slice(0, syncCount);
-      const segmentsWorld = syncGrid.map((g) => {
-        const v = gridToWorld(g.gx, g.gz);
-        return { x: v.x, y: v.y, z: v.z };
-      });
-
-      // record old length BEFORE growth to compute growthGrid index
-      const oldLength = (useGameStore.getState().snakeSegments || []).length;
-
-      useGameStore.getState().syncSnakeSegments(segmentsWorld);
+      const enemy = useGameStore.getState().enemyPosition;
+      if (enemy && enemy.gx === candidateGX && enemy.gz === candidateGZ) {
+        gameOver();
+        return;
+      }
 
       // After authoritative store sync, check logical food consumption using grid equality
       const food = useGameStore.getState().foodPosition;
       if (food && typeof food.gx === 'number' && food.gx === candidateGX && food.gz === candidateGZ) {
-        // determine growth grid (the previous tail cell) from history at index oldLength
-        const growthGrid = gridHistoryRef.current[oldLength];
-        let growthWorld = null;
-        if (growthGrid) {
-          const v = gridToWorld(growthGrid.gx, growthGrid.gz);
-          growthWorld = { x: v.x, y: v.y, z: v.z };
-        }
-
-        // multi-value growth: append additional repeated copies of growthGrid to history
-        const eatenValue = useGameStore.getState().currentFoodValue || 0;
-        if (growthGrid && eatenValue > 0) {
-          // gridHistory already contains the previous tail at index oldLength; append (eatenValue - 1) more copies
-          const extra = Math.max(0, eatenValue - 1);
-          for (let k = 0; k < extra; k += 1) {
-            gridHistoryRef.current.push({ gx: growthGrid.gx, gz: growthGrid.gz });
-          }
-          // stabilize new-tail visuals at the first appended index
-          newTailHoldRef.current = { index: oldLength, gx: growthGrid.gx, gz: growthGrid.gz };
-        }
-
-        // consume exactly once per logical tick, providing authoritative growth world position
-        useGameStore.getState().eatFood(growthWorld);
+        useGameStore.getState().beginFoodMerge();
       }
     }
 
@@ -450,29 +408,6 @@ function Player() {
     const cur = gridToWorld(curGridRef.current.gx, curGridRef.current.gz);
     const pos = prev.clone().lerp(cur, interpRef.current);
     rb.setNextKinematicTranslation(pos);
-
-    // update segments visuals by following consecutive gridHistory cells
-    const maxHistory = segmentCount + 5; // keep only enough history for segments + small margin
-    if (gridHistoryRef.current.length > maxHistory) gridHistoryRef.current.length = maxHistory;
-
-    segmentRefs.current.forEach((segment, i) => {
-      if (!segment) return;
-      // If this is a newly grown tail being held, keep it fixed at the growth cell for this interval
-      if (newTailHoldRef.current && newTailHoldRef.current.index === i) {
-        const p = gridToWorld(newTailHoldRef.current.gx, newTailHoldRef.current.gz);
-        segment.position.set(p.x, p.y, p.z);
-        return;
-      }
-
-      // new logical cell for this body segment is history[i+1]
-      // previous logical cell is history[i+2]
-      const newGrid = gridHistoryRef.current[i + 1] ?? curGridRef.current;
-      const prevGrid = gridHistoryRef.current[i + 2] ?? newGrid;
-      const prevWorld = gridToWorld(prevGrid.gx, prevGrid.gz);
-      const newWorld = gridToWorld(newGrid.gx, newGrid.gz);
-      // interpolate using the same interpRef as the head to avoid corner-cutting
-      segment.position.lerpVectors(prevWorld, newWorld, interpRef.current);
-    });
 
     // camera follow — follow the interpolated head position (pos)
     const headWorld = pos.clone();
@@ -504,19 +439,6 @@ function Player() {
           )}
       </RigidBody>
 
-      {Array.from({ length: Math.max(0, segmentCount) }).map((_, i) => (
-        <mesh
-          key={`segment-${i}`}
-          ref={(el) => {
-            segmentRefs.current[i] = el;
-          }}
-          position={[0, 0.5, -(i + 1) * 0.7]}
-          castShadow
-        >
-          <sphereGeometry args={[0.3, 14, 14]} />
-          <meshStandardMaterial color={skin.bodyColor} roughness={0.5} metalness={0.1} />
-        </mesh>
-      ))}
     </group>
   );
 }
@@ -539,6 +461,7 @@ export default function Scene() {
       <Physics gravity={[0, -9.81, 0]}>
         <Map />
         <Player />
+        <Enemy />
         <Food />
       </Physics>
 
