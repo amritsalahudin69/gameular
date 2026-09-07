@@ -26,6 +26,7 @@ const writeStorage = (key, value) => {
 // Arena dimensions (must be odd to keep a centered origin)
 const ARENA_COLS = 41;
 const ARENA_ROWS = 29;
+const MAX_ENEMIES = 20;
 
 export const SKIN_PRESETS = {
   classic: {
@@ -160,7 +161,14 @@ const getWalkableFromMatrix = (matrix) => {
 
 const positionKey = (position) => (position ? `${position.gx},${position.gz}` : null);
 
-const pickRandomFood = (matrix, playerPosition = null, blockedPosition = null) => {
+const normalizeEnemyCount = (value) => {
+  if (value === undefined || value === null || value === '') return 1;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 1;
+  return Math.max(0, Math.min(MAX_ENEMIES, Math.floor(parsed)));
+};
+
+const pickRandomFood = (matrix, playerPosition = null, blockedPositions = []) => {
   // Defensive checks
   if (!matrix || !matrix.length || !matrix[0]) return null;
   const rows = matrix.length;
@@ -203,10 +211,12 @@ const pickRandomFood = (matrix, playerPosition = null, blockedPosition = null) =
 
   // The only occupied gameplay cell is the player's current cell.
   const playerKey = key(headGX, headGZ);
-  const blockedKey = positionKey(blockedPosition);
+  const blockedKeys = new Set((Array.isArray(blockedPositions) ? blockedPositions : [blockedPositions])
+    .filter(Boolean)
+    .map(positionKey));
   const candidates = reachable.filter((c) => {
     const cellKey = key(c.gx, c.gz);
-    return cellKey !== playerKey && cellKey !== blockedKey;
+    return cellKey !== playerKey && !blockedKeys.has(cellKey);
   });
 
   if (!candidates.length) {
@@ -219,7 +229,7 @@ const pickRandomFood = (matrix, playerPosition = null, blockedPosition = null) =
   return world;
 };
 
-const pickEnemySpawn = (matrix, playerPosition, foodPosition) => {
+const pickEnemySpawns = (matrix, count, playerPosition, foodPosition) => {
   const ox = (matrix[0].length - 1) / 2;
   const oz = (matrix.length - 1) / 2;
   const playerGX = Math.round(playerPosition.gx ?? playerPosition.x + ox);
@@ -229,13 +239,32 @@ const pickEnemySpawn = (matrix, playerPosition, foodPosition) => {
     const sameFood = foodPosition && cell.gx === foodPosition.gx && cell.gz === foodPosition.gz;
     return !samePlayer && !sameFood;
   });
-  if (!cells.length) return null;
+  if (!cells.length || count <= 0) return [];
 
   const distant = cells.filter((cell) => (
     Math.abs(cell.gx - playerGX) + Math.abs(cell.gz - playerGZ) >= 6
   ));
-  const pool = distant.length ? distant : cells;
-  return pool[Math.floor(Math.random() * pool.length)];
+  const available = [...(distant.length ? distant : cells)];
+  const selected = [];
+  while (selected.length < count && available.length) {
+    const pool = selected.length < distant.length ? available.filter((cell) => (
+      Math.abs(cell.gx - playerGX) + Math.abs(cell.gz - playerGZ) >= 6
+    )) : available;
+    const source = pool.length ? pool : available;
+    const pickIndex = Math.floor(Math.random() * source.length);
+    const pick = source[pickIndex];
+    selected.push({
+      id: `enemy-${selected.length}`,
+      x: pick.x,
+      y: pick.y,
+      z: pick.z,
+      gx: pick.gx,
+      gz: pick.gz,
+    });
+    const availableIndex = available.indexOf(pick);
+    available.splice(availableIndex, 1);
+  }
+  return selected;
 };
 
 // initial level
@@ -250,7 +279,9 @@ const initialLevelConfig = DEFAULT_LEVEL_CONFIG;
 
 // initial maze depends on initial level config startValue
 const initialMaze = generateMaze(initialLevel, (initialLevelConfig && initialLevelConfig.startValue) || 1);
+const initialEnemyCount = normalizeEnemyCount(initialLevelConfig && initialLevelConfig.enemyCount);
 const initialFoodPosition = pickRandomFood(initialMaze, INITIAL_PLAYER_POSITION);
+const initialEnemyPositions = pickEnemySpawns(initialMaze, initialEnemyCount, INITIAL_PLAYER_POSITION, initialFoodPosition);
 
 export const useGameStore = create((set) => ({
   // authoritative numeric value represented by the head Numberblock; initial from level config
@@ -267,7 +298,7 @@ export const useGameStore = create((set) => ({
   currentFoodIndex: 0,
   currentFoodValue: (initialLevelConfig && initialLevelConfig.foods && initialLevelConfig.foods[0]) || null,
   foodPosition: initialFoodPosition,
-  enemyPosition: pickEnemySpawn(initialMaze, INITIAL_PLAYER_POSITION, initialFoodPosition),
+  enemyPositions: initialEnemyPositions,
   enemyActive: true,
   mergeFeedback: null,
   selectedSkin: initialSkin,
@@ -288,10 +319,11 @@ export const useGameStore = create((set) => ({
         currentFoodValue: (state.levelConfig && state.levelConfig.foods && state.levelConfig.foods[0]) || null,
         ...(() => {
           const matrix = state.mazeMatrix || initialMaze;
+          const count = normalizeEnemyCount(state.levelConfig && state.levelConfig.enemyCount);
           const nextFood = pickRandomFood(matrix, INITIAL_PLAYER_POSITION);
           return {
             foodPosition: nextFood,
-            enemyPosition: pickEnemySpawn(matrix, INITIAL_PLAYER_POSITION, nextFood),
+            enemyPositions: pickEnemySpawns(matrix, count, INITIAL_PLAYER_POSITION, nextFood),
             enemyActive: true,
           };
         })(),
@@ -302,6 +334,7 @@ export const useGameStore = create((set) => ({
 
   gameOver: () =>
     set((state) => {
+      if (state.gameState === 'gameover') return state;
       const best = Math.max(state.highScore, state.score);
       if (best !== state.highScore) writeStorage(HIGH_SCORE_KEY, best);
 
@@ -320,7 +353,11 @@ export const useGameStore = create((set) => ({
     }),
 
   syncPlayerPosition: (playerPosition) => set({ playerPosition }),
-  syncEnemyPosition: (enemyPosition) => set({ enemyPosition }),
+  syncEnemyPosition: (id, enemyPosition) => set((state) => ({
+    enemyPositions: state.enemyPositions.map((enemy) => (
+      enemy.id === id ? enemyPosition : enemy
+    )),
+  })),
 
   beginFoodMerge: () =>
     set((state) => {
@@ -361,7 +398,7 @@ export const useGameStore = create((set) => ({
       if (feedback.nextIndex < ((state.levelConfig && state.levelConfig.foods) || []).length) {
         return {
           currentValue: feedback.result,
-          foodPosition: pickRandomFood(state.mazeMatrix, state.playerPosition, state.enemyPosition),
+          foodPosition: pickRandomFood(state.mazeMatrix, state.playerPosition, state.enemyPositions),
           currentFoodIndex: feedback.nextIndex,
           currentFoodValue: feedback.nextFoodValue,
           mergeFeedback: null,
@@ -386,13 +423,14 @@ export const useGameStore = create((set) => ({
       const startValue = (cfg && cfg.startValue) || 1;
       const m = generateMaze(lvl, startValue);
       const nextFood = pickRandomFood(m, INITIAL_PLAYER_POSITION);
+      const count = normalizeEnemyCount(cfg && cfg.enemyCount);
       return {
         currentLevel: lvl,
         mazeMatrix: m,
         playerPosition: { ...INITIAL_PLAYER_POSITION },
         currentValue: startValue,
         foodPosition: nextFood,
-        enemyPosition: pickEnemySpawn(m, INITIAL_PLAYER_POSITION, nextFood),
+        enemyPositions: pickEnemySpawns(m, count, INITIAL_PLAYER_POSITION, nextFood),
         enemyActive: true,
         mergeFeedback: null,
         gameState: 'idle',
@@ -413,6 +451,7 @@ export const useGameStore = create((set) => ({
     const startValue = (cfg && cfg.startValue) || 1;
     const m = generateMaze(state.currentLevel, startValue);
     const nextFood = pickRandomFood(m, INITIAL_PLAYER_POSITION);
+    const count = normalizeEnemyCount(cfg && cfg.enemyCount);
     return {
       mazeMatrix: m,
       playerPosition: { ...INITIAL_PLAYER_POSITION },
@@ -420,7 +459,7 @@ export const useGameStore = create((set) => ({
       currentFoodIndex: 0,
       currentFoodValue: (cfg && cfg.foods && cfg.foods[0]) || null,
       foodPosition: nextFood,
-      enemyPosition: pickEnemySpawn(m, INITIAL_PLAYER_POSITION, nextFood),
+      enemyPositions: pickEnemySpawns(m, count, INITIAL_PLAYER_POSITION, nextFood),
       enemyActive: true,
       mergeFeedback: null,
       gameState: 'idle',

@@ -172,6 +172,7 @@ function Player() {
   const interpRef = useRef(1);
   const gameState = useGameStore((s) => s.gameState);
   const mergeFeedback = useGameStore((s) => s.mergeFeedback);
+  const enemyPositions = useGameStore((s) => s.enemyPositions);
   const gameOver = useGameStore((s) => s.gameOver);
   const selectedSkin = useGameStore((s) => s.selectedSkin);
   const setElapsedTime = useGameStore((s) => s.setElapsedTime);
@@ -387,8 +388,8 @@ function Player() {
       const playerWorld = gridToWorld(candidateGX, candidateGZ);
       useGameStore.getState().syncPlayerPosition(playerWorld);
 
-      const enemy = useGameStore.getState().enemyPosition;
-      if (enemy && enemy.gx === candidateGX && enemy.gz === candidateGZ) {
+      const enemies = useGameStore.getState().enemyPositions || [];
+      if (enemies.some((enemy) => enemy.gx === candidateGX && enemy.gz === candidateGZ)) {
         gameOver();
         return;
       }
@@ -461,7 +462,9 @@ export default function Scene() {
       <Physics gravity={[0, -9.81, 0]}>
         <Map />
         <Player />
-        <Enemy />
+        {enemyPositions.map((enemy) => (
+          <Enemy key={enemy.id} enemy={enemy} />
+        ))}
         <Food />
       </Physics>
 

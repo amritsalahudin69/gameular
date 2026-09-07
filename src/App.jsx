@@ -115,8 +115,20 @@ function Hud() {
             left: '50%',
             transform: 'translate(-50%, -50%)',
             textAlign: 'center',
+            minWidth: 'min(78vw, 320px)',
+            padding: '22px 24px',
+            borderRadius: 16,
+            background: 'rgba(4, 18, 24, 0.9)',
+            border: gameState === 'gameover' ? '2px solid #fb7185' : '1px solid #35514d',
+            boxShadow: '0 12px 40px rgba(0, 0, 0, 0.35)',
+            zIndex: 6,
           }}
         >
+          {gameState === 'gameover' && (
+            <div style={{ marginBottom: 12, color: '#fecdd3', fontSize: 24, fontWeight: 800 }}>
+              Game Over
+            </div>
+          )}
           <button
             onClick={startGame}
             style={{

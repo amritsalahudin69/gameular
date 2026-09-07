@@ -1,9 +1,13 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { RigidBody } from '@react-three/rapier';
 import * as THREE from 'three';
 import { useGameStore } from './Store';
 
+const enemyTextureCache = new Map();
+const enemyTextureLoads = new Map();
+const textureLoader = new THREE.TextureLoader();
+const DEFAULT_ENEMY_SPRITE = '/assets/enemies/ghost.png';
 const ENEMY_STEP_INTERVAL = 0.32;
 const ATTACK_STEP_LIMIT = 3;
 const ATTACK_COOLDOWN_STEPS = 8;
@@ -18,7 +22,7 @@ const DIRECTIONS = [
 const sameDirection = (a, b) => a.x === b.x && a.z === b.z;
 const reverseDirection = (direction) => ({ x: -direction.x, z: -direction.z });
 
-export default function Enemy() {
+export default function Enemy({ enemy }) {
   const bodyRef = useRef(null);
   const tickRef = useRef(0);
   const prevGridRef = useRef({ gx: 0, gz: 0 });
@@ -31,11 +35,55 @@ export default function Enemy() {
   const opportunityStepsRef = useRef(0);
   const gameState = useGameStore((s) => s.gameState);
   const mergeFeedback = useGameStore((s) => s.mergeFeedback);
-  const enemyPosition = useGameStore((s) => s.enemyPosition);
-  const enemyActive = useGameStore((s) => s.enemyActive);
   const mazeMatrix = useGameStore((s) => s.mazeMatrix);
+  const levelConfig = useGameStore((s) => s.levelConfig);
   const syncEnemyPosition = useGameStore((s) => s.syncEnemyPosition);
   const gameOver = useGameStore((s) => s.gameOver);
+  const [enemyTexture, setEnemyTexture] = useState(null);
+  const enemySprite = typeof levelConfig?.enemySprite === 'string' && levelConfig.enemySprite.trim()
+    ? levelConfig.enemySprite.trim()
+    : DEFAULT_ENEMY_SPRITE;
+
+  useEffect(() => {
+    let mounted = true;
+    setEnemyTexture(null);
+
+    const cached = enemyTextureCache.get(enemySprite);
+    if (cached !== undefined) {
+      setEnemyTexture(cached);
+      return () => { mounted = false; };
+    }
+
+    const pending = enemyTextureLoads.get(enemySprite);
+    const onLoaded = (texture) => {
+      if (mounted) setEnemyTexture(texture && texture.isTexture ? texture : null);
+    };
+    if (pending) {
+      pending.push(onLoaded);
+      return () => { mounted = false; };
+    }
+
+    enemyTextureLoads.set(enemySprite, [onLoaded]);
+    textureLoader.load(
+      enemySprite,
+      (texture) => {
+        const safeTexture = texture && texture.isTexture ? texture : null;
+        enemyTextureCache.set(enemySprite, safeTexture);
+        const callbacks = enemyTextureLoads.get(enemySprite) || [];
+        enemyTextureLoads.delete(enemySprite);
+        callbacks.forEach((callback) => callback(safeTexture));
+      },
+      undefined,
+      () => {
+        enemyTextureCache.set(enemySprite, null);
+        const callbacks = enemyTextureLoads.get(enemySprite) || [];
+        enemyTextureLoads.delete(enemySprite);
+        callbacks.forEach((callback) => callback(null));
+      },
+    );
+
+    return () => { mounted = false; };
+  }, [enemySprite]);
 
   const gridToWorld = (gx, gz) => new THREE.Vector3(
     gx - (mazeMatrix[0].length - 1) / 2,
@@ -44,7 +92,7 @@ export default function Enemy() {
   );
 
   useEffect(() => {
-    const position = useGameStore.getState().enemyPosition;
+    const position = enemy;
     if (!position) return;
     prevGridRef.current = { gx: position.gx, gz: position.gz };
     curGridRef.current = { gx: position.gx, gz: position.gz };
@@ -56,11 +104,11 @@ export default function Enemy() {
     cooldownStepsRef.current = 0;
     opportunityStepsRef.current = 0;
     bodyRef.current?.setNextKinematicTranslation(gridToWorld(position.gx, position.gz));
-  }, [gameState, mazeMatrix]);
+  }, [enemy?.id, gameState, mazeMatrix]);
 
   useFrame((_, delta) => {
     const rb = bodyRef.current;
-    if (!rb || !enemyActive || !enemyPosition || gameState !== 'playing' || mergeFeedback) return;
+    if (!rb || !enemy || gameState !== 'playing' || mergeFeedback) return;
 
     tickRef.current += delta;
     while (tickRef.current >= ENEMY_STEP_INTERVAL) {
@@ -141,7 +189,7 @@ export default function Enemy() {
       prevGridRef.current = { ...current };
       curGridRef.current = nextGrid;
       interpRef.current = 0;
-      syncEnemyPosition({
+      syncEnemyPosition(enemy.id, {
         ...gridToWorld(nextGrid.gx, nextGrid.gz),
         gx: nextGrid.gx,
         gz: nextGrid.gz,
@@ -163,7 +211,7 @@ export default function Enemy() {
     rb.setNextKinematicTranslation(prev.lerp(current, interpRef.current));
   });
 
-  if (!enemyActive || !enemyPosition) return null;
+  if (!enemy) return null;
 
   return (
     <RigidBody
@@ -173,10 +221,21 @@ export default function Enemy() {
       position={[0, 0.5, 0]}
       name="maze-enemy"
     >
-      <mesh castShadow>
-        <icosahedronGeometry args={[0.38, 1]} />
-        <meshStandardMaterial color="#ef4444" emissive="#7f1d1d" emissiveIntensity={0.35} roughness={0.4} />
-      </mesh>
+      {enemyTexture ? (
+        <sprite position={[0, 0, 0]} scale={[0.9, 0.9, 1]}>
+          <spriteMaterial
+            attach="material"
+            map={enemyTexture}
+            transparent
+            depthWrite={false}
+          />
+        </sprite>
+      ) : (
+        <mesh castShadow>
+          <icosahedronGeometry args={[0.38, 1]} />
+          <meshStandardMaterial color="#ef4444" emissive="#7f1d1d" emissiveIntensity={0.35} roughness={0.4} />
+        </mesh>
+      )}
     </RigidBody>
   );
 }
