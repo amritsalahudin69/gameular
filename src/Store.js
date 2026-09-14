@@ -26,7 +26,7 @@ const writeStorage = (key, value) => {
 // Arena dimensions (must be odd to keep a centered origin)
 const ARENA_COLS = 41;
 const ARENA_ROWS = 29;
-const MAX_ENEMIES = 20;
+
 
 export const SKIN_PRESETS = {
   classic: {

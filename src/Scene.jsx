@@ -67,8 +67,16 @@ const loadNumberblockTexture = (value, onLoaded) => {
 };
 
 const MOVE_SPEED = 4.8;
+<<<<<<< HEAD
+const TRAIL_GAP = 8;
+const ROWS = MAZE_MATRIX.length;
+const COLS = MAZE_MATRIX[0].length;
+const CELL_SCALE = 2; // visual scale multiplier for plane/shadows
+const CAMERA_OFFSET = new THREE.Vector3(0, Math.max(7.5, Math.max(ROWS, COLS) / 1.6), Math.max(8.5, Math.max(ROWS, COLS) / 1.6));
+=======
 const STEP_INTERVAL = 0.18; // logical movement tick
 const CAMERA_BASE = new THREE.Vector3(0, 7.5, 8.5);
+>>>>>>> fd2a72e99d645e0092b19bad2568091e121877c8
 
 function Map() {
   const mazeMatrix = useGameStore((s) => s.mazeMatrix);
@@ -100,7 +108,11 @@ function Map() {
   return (
     <group>
       <mesh receiveShadow position={[0, -0.01, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+<<<<<<< HEAD
+        <planeGeometry args={[COLS * CELL_SCALE, ROWS * CELL_SCALE]} />
+=======
         <planeGeometry args={[cols, rows]} />
+>>>>>>> fd2a72e99d645e0092b19bad2568091e121877c8
         <meshStandardMaterial color="#24312f" roughness={0.95} metalness={0.05} />
       </mesh>
 
@@ -314,6 +326,45 @@ function Player() {
     const rb = bodyRef.current;
     if (!rb || gameState !== 'playing' || mergeFeedback) return;
 
+<<<<<<< HEAD
+    const keys = getKeys();
+    const inputX = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
+    const inputZ = (keys.down ? 1 : 0) - (keys.up ? 1 : 0);
+
+    // Lock movement to cardinal directions and prevent 180-degree reversal
+    if (inputX !== 0) {
+      if (!(dirRef.current.x === -inputX && Math.abs(dirRef.current.x) === 1)) {
+        dirRef.current.set(inputX, 0, 0);
+      }
+    } else if (inputZ !== 0) {
+      if (!(dirRef.current.z === -inputZ && Math.abs(dirRef.current.z) === 1)) {
+        dirRef.current.set(0, 0, inputZ);
+      }
+    }
+
+    // Smooth visual step
+    const step = dirRef.current.clone().multiplyScalar(MOVE_SPEED * delta);
+    targetRef.current.add(step);
+
+    rb.setNextKinematicTranslation(targetRef.current);
+
+    const headPos = rb.translation();
+    const head = new THREE.Vector3(headPos.x, headPos.y, headPos.z);
+
+    historyRef.current.unshift(head.clone());
+    const maxHistory = (segmentRefs.current.length + 3) * TRAIL_GAP;
+    if (historyRef.current.length > maxHistory) historyRef.current.length = maxHistory;
+
+    segmentRefs.current.forEach((segment, i) => {
+      if (!segment) return;
+      const target = historyRef.current[Math.min((i + 1) * TRAIL_GAP, historyRef.current.length - 1)] ?? head;
+      segment.position.lerp(target, Math.min(1, delta * 16));
+    });
+
+    const camTarget = head.clone().add(CAMERA_OFFSET);
+    camera.position.lerp(camTarget, Math.min(1, delta * 4.5));
+    camera.lookAt(head.x, head.y + 0.6, head.z);
+=======
     // tiny diagnostic helper to report why a logical game over occurred
     const reportGameOver = (reason, details = {}) => {
       // Emit a deterministic console warning with structured details
@@ -321,6 +372,7 @@ function Player() {
       console.warn('[GAME_OVER]', { reason, ...details });
       gameOver();
     };
+>>>>>>> fd2a72e99d645e0092b19bad2568091e121877c8
 
     // timing accumulator: keep remainder when a logical step occurs
     tickRef.current += delta;
@@ -332,6 +384,47 @@ function Player() {
       setElapsedTime(elapsedRef.current);
     }
 
+<<<<<<< HEAD
+    if (tickRef.current > 1 / 12) {
+      tickRef.current = 0;
+
+      // Grid-based collision check: compute next grid cell and validate against MAZE_MATRIX
+      const rows = MAZE_MATRIX.length;
+      const cols = MAZE_MATRIX[0].length;
+      const ox = (cols - 1) / 2;
+      const oz = (rows - 1) / 2;
+
+      const headGridX = Math.round(head.x + ox);
+      const headGridZ = Math.round(head.z + oz);
+      const stepX = Math.sign(dirRef.current.x);
+      const stepZ = Math.sign(dirRef.current.z);
+      const nextX = headGridX + stepX;
+      const nextZ = headGridZ + stepZ;
+
+      // Out of bounds => game over
+      if (nextX < 0 || nextX >= cols || nextZ < 0 || nextZ >= rows) {
+        gameOver();
+        return;
+      }
+
+      // Wall hit => game over
+      if (MAZE_MATRIX[nextZ][nextX] === 1) {
+        gameOver();
+        return;
+      }
+
+      const segments = [
+        { x: head.x, y: head.y, z: head.z },
+        ...segmentRefs.current.map((seg) => ({
+          x: seg?.position.x ?? head.x,
+          y: seg?.position.y ?? head.y,
+          z: seg?.position.z ?? head.z,
+        })),
+      ];
+      syncSnakeSegments(segments);
+    }
+
+=======
     // process one-or-more logical steps while preserving remainder
     while (tickRef.current >= stepInterval) {
       // consume the interval but keep remainder
@@ -415,6 +508,7 @@ function Player() {
     const camTarget = headWorld.clone().add(new THREE.Vector3(0, CAMERA_BASE.y, CAMERA_BASE.z));
     camera.position.lerp(camTarget, Math.min(1, delta * 4.5));
     camera.lookAt(headWorld.x, headWorld.y + 0.6, headWorld.z);
+>>>>>>> fd2a72e99d645e0092b19bad2568091e121877c8
   });
 
   return (
@@ -469,7 +563,11 @@ export default function Scene() {
       </Physics>
 
       <Environment preset="city" />
+<<<<<<< HEAD
+      <ContactShadows position={[0, -0.001, 0]} opacity={0.4} scale={Math.max(COLS, ROWS) * CELL_SCALE} blur={2.3} far={16} />
+=======
       <ContactShadows position={[0, -0.001, 0]} opacity={0.4} scale={Math.max(cols, rows)} blur={2.3} far={16} />
+>>>>>>> fd2a72e99d645e0092b19bad2568091e121877c8
     </>
   );
 }
