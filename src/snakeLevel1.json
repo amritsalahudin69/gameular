@@ -1,8 +1,30 @@
 {
   "id": "snake-level-1",
   "startValue": 1,
-  "enemyCount": 1,
+  "enemyCount": 9,
   "enemySprite": "/assets/numberblocks/1.png",
   "stepIntervalSec": 0.18,
-  "foods": [3, 2, 1, 4, 2, 3, 1, 2, 4, 1]
+  "foods": [
+    3,
+    2,
+    1,
+    4,
+    2,
+    3,
+    1,
+    2,
+    4,
+    1
+  ],
+  "enemySprites": [
+    "/assets/numberblocks/totok.png",
+    "/assets/numberblocks/joko.png",
+    "/assets/numberblocks/jono.png",
+    "/assets/numberblocks/rangga.png",
+    "/assets/numberblocks/lukman.png",
+    "/assets/numberblocks/alif.png",
+    "/assets/numberblocks/galih.png",
+    "/assets/numberblocks/samsul.png",
+    "/assets/numberblocks/arya.png"
+  ]
 }

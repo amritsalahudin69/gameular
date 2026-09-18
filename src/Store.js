@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { dispatchMergeResult } from './VFXStore';
 
 const FOOD_Y = 0.4;
 export const MERGE_FEEDBACK_MS = 420;
@@ -26,6 +27,7 @@ const writeStorage = (key, value) => {
 // Arena dimensions (must be odd to keep a centered origin)
 const ARENA_COLS = 41;
 const ARENA_ROWS = 29;
+const MAX_ENEMIES = 20;
 
 
 export const SKIN_PRESETS = {
@@ -162,7 +164,8 @@ const getWalkableFromMatrix = (matrix) => {
 const positionKey = (position) => (position ? `${position.gx},${position.gz}` : null);
 
 const normalizeEnemyCount = (value) => {
-  if (value === undefined || value === null || value === '') return 1;
+  if (typeof value !== 'number' && typeof value !== 'string') return 1;
+  if (typeof value === 'string' && !value.trim()) return 1;
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return 1;
   return Math.max(0, Math.min(MAX_ENEMIES, Math.floor(parsed)));
@@ -291,6 +294,7 @@ export const useGameStore = create((set) => ({
   elapsedTime: 0,
   highScore: readNumber(HIGH_SCORE_KEY, 0),
   gameState: 'idle',
+  sessionId: 0,
   currentLevel: initialLevel,
   mazeMatrix: initialMaze,
   // level/session deterministic config
@@ -310,6 +314,7 @@ export const useGameStore = create((set) => ({
       const startValue = (state.levelConfig && state.levelConfig.startValue) || 1;
       return {
         gameState: 'playing',
+        sessionId: state.sessionId + 1,
         score: 0,
         elapsedTime: 0,
         playerPosition: { ...INITIAL_PLAYER_POSITION },
@@ -352,12 +357,22 @@ export const useGameStore = create((set) => ({
       return { elapsedTime };
     }),
 
-  syncPlayerPosition: (playerPosition) => set({ playerPosition }),
-  syncEnemyPosition: (id, enemyPosition) => set((state) => ({
-    enemyPositions: state.enemyPositions.map((enemy) => (
-      enemy.id === id ? enemyPosition : enemy
-    )),
-  })),
+  syncPlayerPosition: (playerPosition) => set((state) => {
+    if (state.gameState !== 'playing' || state.mergeFeedback) return state;
+    const matrix = state.mazeMatrix;
+    const gx = playerPosition.x + (matrix[0].length - 1) / 2;
+    const gz = playerPosition.z + (matrix.length - 1) / 2;
+    if (!Number.isInteger(gx) || !Number.isInteger(gz) || matrix[gz]?.[gx] !== 0) return state;
+    return { playerPosition: { x: playerPosition.x, y: 0.5, z: playerPosition.z, gx, gz } };
+  }),
+  syncEnemyPosition: (id, enemyPosition) => set((state) => {
+    if (state.gameState !== 'playing' || state.mergeFeedback) return state;
+    return {
+      enemyPositions: state.enemyPositions.map((enemy) => (
+        enemy.id === id ? { ...enemy, ...enemyPosition, id: enemy.id } : enemy
+      )),
+    };
+  }),
 
   beginFoodMerge: () =>
     set((state) => {
@@ -377,6 +392,18 @@ export const useGameStore = create((set) => ({
       const level = state.levelConfig || initialLevelConfig;
       const foods = (level && level.foods) || [];
       const nextIndex = (typeof state.currentFoodIndex === 'number' ? state.currentFoodIndex : 0) + 1;
+
+      // Dispatch MERGE_RESULT VFX event
+      const playerPos = state.playerPosition;
+      dispatchMergeResult({
+        value: result,
+        position: {
+          x: playerPos.x,
+          z: playerPos.z,
+          gx: Math.round(playerPos.gx ?? playerPos.x + ((state.mazeMatrix[0]?.length || 17) - 1) / 2),
+          gz: Math.round(playerPos.gz ?? playerPos.z + ((state.mazeMatrix?.length || 27) - 1) / 2),
+        },
+      });
 
       return {
         score: nextScore,
@@ -425,10 +452,13 @@ export const useGameStore = create((set) => ({
       const nextFood = pickRandomFood(m, INITIAL_PLAYER_POSITION);
       const count = normalizeEnemyCount(cfg && cfg.enemyCount);
       return {
+        sessionId: state.sessionId + 1,
         currentLevel: lvl,
         mazeMatrix: m,
         playerPosition: { ...INITIAL_PLAYER_POSITION },
         currentValue: startValue,
+        currentFoodIndex: 0,
+        currentFoodValue: (cfg && cfg.foods && cfg.foods[0]) || null,
         foodPosition: nextFood,
         enemyPositions: pickEnemySpawns(m, count, INITIAL_PLAYER_POSITION, nextFood),
         enemyActive: true,
@@ -453,6 +483,7 @@ export const useGameStore = create((set) => ({
     const nextFood = pickRandomFood(m, INITIAL_PLAYER_POSITION);
     const count = normalizeEnemyCount(cfg && cfg.enemyCount);
     return {
+      sessionId: state.sessionId + 1,
       mazeMatrix: m,
       playerPosition: { ...INITIAL_PLAYER_POSITION },
       currentValue: startValue,

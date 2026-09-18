@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { KeyboardControls } from '@react-three/drei';
 import Scene from './Scene.jsx';
+import Minimap from './Minimap.jsx';
 import { MERGE_FEEDBACK_MS, SKIN_PRESETS, useGameStore } from './Store';
 
 const controlsMap = [
@@ -108,15 +109,16 @@ function Hud() {
 
       {(gameState === 'idle' || gameState === 'gameover') && (
         <div
+          className={gameState === 'gameover' ? 'game-over-card' : undefined}
           style={{
             pointerEvents: 'auto',
             position: 'absolute',
-            top: '50%',
+            top: gameState === 'gameover' ? undefined : '50%',
             left: '50%',
-            transform: 'translate(-50%, -50%)',
+            transform: gameState === 'gameover' ? 'translateX(-50%)' : 'translate(-50%, -50%)',
             textAlign: 'center',
-            minWidth: 'min(78vw, 320px)',
-            padding: '22px 24px',
+            minWidth: gameState === 'gameover' ? undefined : 'min(78vw, 320px)',
+            padding: gameState === 'gameover' ? undefined : '22px 24px',
             borderRadius: 16,
             background: 'rgba(4, 18, 24, 0.9)',
             border: gameState === 'gameover' ? '2px solid #fb7185' : '1px solid #35514d',
@@ -125,18 +127,19 @@ function Hud() {
           }}
         >
           {gameState === 'gameover' && (
-            <div style={{ marginBottom: 12, color: '#fecdd3', fontSize: 24, fontWeight: 800 }}>
+            <div className="game-over-heading" style={{ color: '#fecdd3', fontWeight: 800 }}>
               Game Over
             </div>
           )}
           <button
+            className={gameState === 'gameover' ? 'game-over-restart' : undefined}
             onClick={startGame}
             style={{
               border: 0,
               borderRadius: 10,
               background: '#22d3ee',
               color: '#042f2e',
-              padding: '12px 20px',
+              padding: gameState === 'gameover' ? undefined : '12px 20px',
               fontWeight: 700,
               cursor: 'pointer',
             }}
@@ -247,6 +250,7 @@ export default function App() {
         <Scene />
       </Canvas>
       <Hud />
+      <Minimap />
     </KeyboardControls>
   );
 }

@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
-import { ContactShadows, Environment, useKeyboardControls } from '@react-three/drei';
+import { ContactShadows, Environment, useTexture } from '@react-three/drei';
 import {
   CuboidCollider,
   InstancedRigidBodies,
@@ -9,7 +9,9 @@ import {
 } from '@react-three/rapier';
 import * as THREE from 'three';
 import { SKIN_PRESETS, useGameStore } from './Store';
+import { dispatchFoodEat } from './VFXStore';
 import Enemy from './Enemy.jsx';
+import VFXManager from './VFXManager.jsx';
 
 // Simple texture cache and loader for Numberblocks PNGs.
 // textureCache: key -> THREE.Texture | null (failed)
@@ -66,62 +68,112 @@ const loadNumberblockTexture = (value, onLoaded) => {
   );
 };
 
-const MOVE_SPEED = 4.8;
-<<<<<<< HEAD
-const TRAIL_GAP = 8;
-const ROWS = MAZE_MATRIX.length;
-const COLS = MAZE_MATRIX[0].length;
-const CELL_SCALE = 2; // visual scale multiplier for plane/shadows
-const CAMERA_OFFSET = new THREE.Vector3(0, Math.max(7.5, Math.max(ROWS, COLS) / 1.6), Math.max(8.5, Math.max(ROWS, COLS) / 1.6));
-=======
 const STEP_INTERVAL = 0.18; // logical movement tick
 const CAMERA_BASE = new THREE.Vector3(0, 7.5, 8.5);
->>>>>>> fd2a72e99d645e0092b19bad2568091e121877c8
 
 function Map() {
   const mazeMatrix = useGameStore((s) => s.mazeMatrix);
-  const instances = useMemo(() => {
+  const floorTexture = useTexture('/sprite/lantai.png');
+  const borderTexture = useTexture('/sprite/wall-border.png');
+  const obstacleTexture = useTexture('/sprite/wall-rintangan.png');
+
+  const { boundaryInstances, obstacleInstances } = useMemo(() => {
     const rows = mazeMatrix.length;
     const cols = mazeMatrix[0].length;
     const ox = (cols - 1) / 2;
     const oz = (rows - 1) / 2;
-    const data = [];
+    const boundaryData = [];
+    const obstacleData = [];
 
     for (let z = 0; z < rows; z += 1) {
       for (let x = 0; x < cols; x += 1) {
         if (mazeMatrix[z][x] === 1) {
-          data.push({
+          const isBoundary = z === 0 || z === rows - 1 || x === 0 || x === cols - 1;
+          const wall = {
             key: `wall-${x}-${z}`,
             position: [x - ox, 0.5, z - oz],
             rotation: [0, 0, 0],
             scale: [1, 1, 1],
-          });
+          };
+          if (isBoundary) {
+            boundaryData.push(wall);
+          } else {
+            obstacleData.push(wall);
+          }
         }
       }
     }
 
-    return { data, rows, cols, ox, oz };
+    const sphere = new THREE.Sphere(new THREE.Vector3(0, 0.5, 0), Math.hypot(cols, 1, rows) / 2);
+    return {
+      boundaryInstances: {
+        data: boundaryData,
+        rows,
+        cols,
+        key: THREE.MathUtils.generateUUID(),
+        boundingSphere: sphere,
+      },
+      obstacleInstances: {
+        data: obstacleData,
+        key: THREE.MathUtils.generateUUID(),
+        boundingSphere: sphere,
+      },
+    };
   }, [mazeMatrix]);
 
   const rows = mazeMatrix.length;
   const cols = mazeMatrix[0].length;
+
+  useLayoutEffect(() => {
+    // Floor texture
+    const tileWidth = 4;
+    const tileHeight = tileWidth * floorTexture.image.height / floorTexture.image.width;
+    floorTexture.wrapS = floorTexture.wrapT = THREE.RepeatWrapping;
+    floorTexture.repeat.set(cols / tileWidth, rows / tileHeight);
+    floorTexture.magFilter = THREE.NearestFilter;
+    floorTexture.minFilter = THREE.NearestFilter;
+    floorTexture.generateMipmaps = false;
+    floorTexture.colorSpace = THREE.SRGBColorSpace;
+    floorTexture.needsUpdate = true;
+  }, [floorTexture, cols, rows]);
+
+  useLayoutEffect(() => {
+    // Wall textures: one tile per wall unit
+    [borderTexture, obstacleTexture].forEach((texture) => {
+      texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+      texture.repeat.set(1, 1);
+      texture.magFilter = THREE.NearestFilter;
+      texture.minFilter = THREE.NearestFilter;
+      texture.generateMipmaps = false;
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.needsUpdate = true;
+    });
+  }, [borderTexture, obstacleTexture]);
+
   return (
     <group>
       <mesh receiveShadow position={[0, -0.01, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-<<<<<<< HEAD
-        <planeGeometry args={[COLS * CELL_SCALE, ROWS * CELL_SCALE]} />
-=======
         <planeGeometry args={[cols, rows]} />
->>>>>>> fd2a72e99d645e0092b19bad2568091e121877c8
-        <meshStandardMaterial color="#24312f" roughness={0.95} metalness={0.05} />
+        <meshStandardMaterial map={floorTexture} color="#ffffff" transparent alphaTest={0.01} roughness={0.95} metalness={0.05} />
       </mesh>
 
-      <InstancedRigidBodies instances={instances.data} type="fixed" colliders="cuboid">
-        <instancedMesh castShadow receiveShadow args={[null, null, instances.data.length]}>
-          <boxGeometry args={[1, 1, 1]} />
-          <meshStandardMaterial color="#5a7367" roughness={0.8} metalness={0.08} />
-        </instancedMesh>
-      </InstancedRigidBodies>
+      {boundaryInstances.data.length > 0 && (
+        <InstancedRigidBodies key={boundaryInstances.key} instances={boundaryInstances.data} type="fixed" colliders="cuboid">
+          <instancedMesh castShadow receiveShadow boundingSphere={boundaryInstances.boundingSphere} args={[null, null, boundaryInstances.data.length]}>
+            <boxGeometry args={[1, 1, 1]} />
+            <meshStandardMaterial map={borderTexture} color="#ffffff" roughness={0.8} metalness={0.08} />
+          </instancedMesh>
+        </InstancedRigidBodies>
+      )}
+
+      {obstacleInstances.data.length > 0 && (
+        <InstancedRigidBodies key={obstacleInstances.key} instances={obstacleInstances.data} type="fixed" colliders="cuboid">
+          <instancedMesh castShadow receiveShadow boundingSphere={obstacleInstances.boundingSphere} args={[null, null, obstacleInstances.data.length]}>
+            <boxGeometry args={[1, 1, 1]} />
+            <meshStandardMaterial map={obstacleTexture} color="#ffffff" roughness={0.8} metalness={0.08} />
+          </instancedMesh>
+        </InstancedRigidBodies>
+      )}
     </group>
   );
 }
@@ -159,7 +211,7 @@ function Food() {
       <CuboidCollider args={[0.3, 0.3, 0.3]} sensor />
 
       {texState ? (
-        <sprite position={[0, 0, 0]} scale={[0.9, 0.9, 1]}> 
+        <sprite position={[0, 0, 0]} scale={[2, 2, 2.6]}>  //ukuran sprite disesuaikan dengan ukuran Numberblock
           <spriteMaterial attach="material" map={texState} transparent />
         </sprite>
       ) : (
@@ -174,7 +226,12 @@ function Food() {
 
 function Player() {
   const bodyRef = useRef(null);
+  const visualRef = useRef(null);
+  const visualFromRef = useRef(new THREE.Vector3());
+  const visualTargetRef = useRef(new THREE.Vector3());
+  const visualElapsedRef = useRef(0);
   const tickRef = useRef(0);
+  const readySessionRef = useRef(null);
   const elapsedRef = useRef(0);
   const elapsedSyncRef = useRef(0);
   const dirRef = useRef({ x: 0, z: 1 }); // committed grid direction
@@ -184,14 +241,13 @@ function Player() {
   const interpRef = useRef(1);
   const gameState = useGameStore((s) => s.gameState);
   const mergeFeedback = useGameStore((s) => s.mergeFeedback);
-  const enemyPositions = useGameStore((s) => s.enemyPositions);
+  const sessionId = useGameStore((s) => s.sessionId);
   const gameOver = useGameStore((s) => s.gameOver);
   const selectedSkin = useGameStore((s) => s.selectedSkin);
   const setElapsedTime = useGameStore((s) => s.setElapsedTime);
   const mazeMatrix = useGameStore((s) => s.mazeMatrix);
   const levelConfig = useGameStore((s) => s.levelConfig);
   const stepInterval = (levelConfig && levelConfig.stepIntervalSec) || STEP_INTERVAL;
-  const [, getKeys] = useKeyboardControls();
   const { camera } = useThree();
   const skin = SKIN_PRESETS[selectedSkin] ?? SKIN_PRESETS.classic;
 
@@ -225,8 +281,8 @@ function Player() {
   }, [camera]);
 
   useEffect(() => {
-    if (gameState !== 'playing') return;
     // Reset runtime session-local refs to avoid leakage between runs
+    readySessionRef.current = sessionId;
     tickRef.current = 0;
     elapsedRef.current = 0;
     elapsedSyncRef.current = 0;
@@ -241,17 +297,35 @@ function Player() {
     curGridRef.current = { gx: headGX, gz: headGZ };
     interpRef.current = 1;
 
-    bodyRef.current?.setNextKinematicTranslation(gridToWorld(headGX, headGZ));
+    const spawn = gridToWorld(headGX, headGZ);
+    visualRef.current?.position.copy(spawn);
+    visualFromRef.current.copy(spawn);
+    visualTargetRef.current.copy(spawn);
+    visualElapsedRef.current = stepInterval;
+    bodyRef.current?.setTranslation(spawn, true);
+    bodyRef.current?.setNextKinematicTranslation(spawn);
     camera.position.copy(CAMERA_BASE);
     camera.lookAt(0, 0.5, 0);
-  }, [camera, gameState, mazeMatrix]);
+  }, [camera, sessionId, mazeMatrix]);
+
+  useEffect(() => {
+    if (gameState === 'playing' && !mergeFeedback) return;
+    tickRef.current = 0;
+    pendingDirRef.current = null;
+    prevGridRef.current = { ...curGridRef.current };
+    const position = gridToWorld(curGridRef.current.gx, curGridRef.current.gz);
+    bodyRef.current?.setTranslation(position, true);
+    bodyRef.current?.setNextKinematicTranslation(position);
+  }, [gameState, mergeFeedback]);
 
   // keyboard fallback — enqueue at most one pending direction per logical tick
   useEffect(() => {
     const queueDirection = (direction) => {
-      if (gameState !== 'playing' || mergeFeedback || !direction) return;
+      const state = useGameStore.getState();
+      if (state.sessionId !== sessionId || state.gameState !== 'playing' || state.mergeFeedback || !direction) return;
 
       const { x: dx, z: dz } = direction;
+      if (!Number.isInteger(dx) || !Number.isInteger(dz) || Math.abs(dx) + Math.abs(dz) !== 1) return;
       const committed = dirRef.current;
       // Reject direct reversal against the committed direction.
       if (dx === -committed.x && dz === -committed.z) return;
@@ -264,6 +338,7 @@ function Player() {
     };
 
     const onKey = (e) => {
+      if (e.repeat) return;
       const code = e.code;
       let dx = 0;
       let dz = 0;
@@ -320,51 +395,29 @@ function Player() {
       window.removeEventListener('touchstart', onTouchStart);
       window.removeEventListener('touchend', onTouchEnd);
     };
-  }, [gameState, mergeFeedback]);
+  }, [gameState, mergeFeedback, sessionId]);
 
   useFrame((_, delta) => {
     const rb = bodyRef.current;
-    if (!rb || gameState !== 'playing' || mergeFeedback) return;
-
-<<<<<<< HEAD
-    const keys = getKeys();
-    const inputX = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
-    const inputZ = (keys.down ? 1 : 0) - (keys.up ? 1 : 0);
-
-    // Lock movement to cardinal directions and prevent 180-degree reversal
-    if (inputX !== 0) {
-      if (!(dirRef.current.x === -inputX && Math.abs(dirRef.current.x) === 1)) {
-        dirRef.current.set(inputX, 0, 0);
-      }
-    } else if (inputZ !== 0) {
-      if (!(dirRef.current.z === -inputZ && Math.abs(dirRef.current.z) === 1)) {
-        dirRef.current.set(0, 0, inputZ);
-      }
+    const state = useGameStore.getState();
+    if (!rb || state.sessionId !== sessionId || readySessionRef.current !== sessionId) return;
+    if (state.gameState !== 'playing' || state.mergeFeedback) {
+      tickRef.current = 0;
+      pendingDirRef.current = null;
+      return;
     }
 
-    // Smooth visual step
-    const step = dirRef.current.clone().multiplyScalar(MOVE_SPEED * delta);
-    targetRef.current.add(step);
+    // Rendering is independent of the authoritative grid and Rapier's interpolation.
+    visualElapsedRef.current = Math.min(stepInterval, visualElapsedRef.current + delta);
+    visualRef.current.position.lerpVectors(
+      visualFromRef.current, visualTargetRef.current, visualElapsedRef.current / stepInterval,
+    );
 
-    rb.setNextKinematicTranslation(targetRef.current);
-
-    const headPos = rb.translation();
-    const head = new THREE.Vector3(headPos.x, headPos.y, headPos.z);
-
-    historyRef.current.unshift(head.clone());
-    const maxHistory = (segmentRefs.current.length + 3) * TRAIL_GAP;
-    if (historyRef.current.length > maxHistory) historyRef.current.length = maxHistory;
-
-    segmentRefs.current.forEach((segment, i) => {
-      if (!segment) return;
-      const target = historyRef.current[Math.min((i + 1) * TRAIL_GAP, historyRef.current.length - 1)] ?? head;
-      segment.position.lerp(target, Math.min(1, delta * 16));
-    });
-
-    const camTarget = head.clone().add(CAMERA_OFFSET);
+    const headWorld = visualRef.current.position;
+    const camTarget = headWorld.clone().add(new THREE.Vector3(0, CAMERA_BASE.y, CAMERA_BASE.z));
     camera.position.lerp(camTarget, Math.min(1, delta * 4.5));
-    camera.lookAt(head.x, head.y + 0.6, head.z);
-=======
+    camera.lookAt(headWorld.x, headWorld.y + 0.6, headWorld.z);
+
     // tiny diagnostic helper to report why a logical game over occurred
     const reportGameOver = (reason, details = {}) => {
       // Emit a deterministic console warning with structured details
@@ -372,10 +425,10 @@ function Player() {
       console.warn('[GAME_OVER]', { reason, ...details });
       gameOver();
     };
->>>>>>> fd2a72e99d645e0092b19bad2568091e121877c8
 
     // timing accumulator: keep remainder when a logical step occurs
-    tickRef.current += delta;
+    // Discard stalled-frame debt instead of bursting through several cells.
+    tickRef.current += Math.min(delta, stepInterval);
     elapsedRef.current += delta;
     elapsedSyncRef.current += delta;
 
@@ -384,49 +437,14 @@ function Player() {
       setElapsedTime(elapsedRef.current);
     }
 
-<<<<<<< HEAD
-    if (tickRef.current > 1 / 12) {
-      tickRef.current = 0;
-
-      // Grid-based collision check: compute next grid cell and validate against MAZE_MATRIX
-      const rows = MAZE_MATRIX.length;
-      const cols = MAZE_MATRIX[0].length;
-      const ox = (cols - 1) / 2;
-      const oz = (rows - 1) / 2;
-
-      const headGridX = Math.round(head.x + ox);
-      const headGridZ = Math.round(head.z + oz);
-      const stepX = Math.sign(dirRef.current.x);
-      const stepZ = Math.sign(dirRef.current.z);
-      const nextX = headGridX + stepX;
-      const nextZ = headGridZ + stepZ;
-
-      // Out of bounds => game over
-      if (nextX < 0 || nextX >= cols || nextZ < 0 || nextZ >= rows) {
-        gameOver();
-        return;
-      }
-
-      // Wall hit => game over
-      if (MAZE_MATRIX[nextZ][nextX] === 1) {
-        gameOver();
-        return;
-      }
-
-      const segments = [
-        { x: head.x, y: head.y, z: head.z },
-        ...segmentRefs.current.map((seg) => ({
-          x: seg?.position.x ?? head.x,
-          y: seg?.position.y ?? head.y,
-          z: seg?.position.z ?? head.z,
-        })),
-      ];
-      syncSnakeSegments(segments);
-    }
-
-=======
     // process one-or-more logical steps while preserving remainder
     while (tickRef.current >= stepInterval) {
+      const live = useGameStore.getState();
+      if (live.sessionId !== sessionId || live.gameState !== 'playing' || live.mergeFeedback) {
+        tickRef.current = 0;
+        pendingDirRef.current = null;
+        return;
+      }
       // consume the interval but keep remainder
       tickRef.current -= stepInterval;
 
@@ -462,7 +480,7 @@ function Player() {
       }
 
       // Safe to index mazeMatrix now because candidate is inside bounds
-      if (mazeMatrix[candidateGZ][candidateGX] === 1) {
+      if (mazeMatrix[candidateGZ][candidateGX] !== 0) {
         // Wall cell -> game over. Do not mutate authoritative position.
         reportGameOver('WALL', {
           currentGX: curGridRef.current.gx,
@@ -479,6 +497,9 @@ function Player() {
       curGridRef.current = { gx: candidateGX, gz: candidateGZ };
       interpRef.current = 0;
       const playerWorld = gridToWorld(candidateGX, candidateGZ);
+      visualFromRef.current.copy(visualRef.current.position);
+      visualTargetRef.current.copy(playerWorld);
+      visualElapsedRef.current = 0;
       useGameStore.getState().syncPlayerPosition(playerWorld);
 
       const enemies = useGameStore.getState().enemyPositions || [];
@@ -490,7 +511,22 @@ function Player() {
       // After authoritative store sync, check logical food consumption using grid equality
       const food = useGameStore.getState().foodPosition;
       if (food && typeof food.gx === 'number' && food.gx === candidateGX && food.gz === candidateGZ) {
+        // Dispatch FOOD_EAT VFX event
+        dispatchFoodEat({
+          position: {
+            x: playerWorld.x,
+            z: playerWorld.z,
+            gx: candidateGX,
+            gz: candidateGZ,
+          },
+        });
         useGameStore.getState().beginFoodMerge();
+        tickRef.current = 0;
+        pendingDirRef.current = null;
+        prevGridRef.current = { ...curGridRef.current };
+        rb.setTranslation(playerWorld, true);
+        rb.setNextKinematicTranslation(playerWorld);
+        return;
       }
     }
 
@@ -503,12 +539,6 @@ function Player() {
     const pos = prev.clone().lerp(cur, interpRef.current);
     rb.setNextKinematicTranslation(pos);
 
-    // camera follow — follow the interpolated head position (pos)
-    const headWorld = pos.clone();
-    const camTarget = headWorld.clone().add(new THREE.Vector3(0, CAMERA_BASE.y, CAMERA_BASE.z));
-    camera.position.lerp(camTarget, Math.min(1, delta * 4.5));
-    camera.lookAt(headWorld.x, headWorld.y + 0.6, headWorld.z);
->>>>>>> fd2a72e99d645e0092b19bad2568091e121877c8
   });
 
   return (
@@ -521,6 +551,8 @@ function Player() {
         name="player-head"
       >
         <CuboidCollider args={[0.38, 0.38, 0.38]} />
+      </RigidBody>
+      <group ref={visualRef} name="player-visual" position={[0, 0.5, 0]}>
           {/* Head: use Numberblock sprite as primary when available, otherwise fallback to cube */}
           {headTex ? (
             <sprite position={[0, 0, 0]} scale={[1.0, 1.0, 1]}> 
@@ -532,7 +564,7 @@ function Player() {
               <meshStandardMaterial color={skin.headColor} roughness={0.45} metalness={0.2} />
             </mesh>
           )}
-      </RigidBody>
+      </group>
 
     </group>
   );
@@ -540,6 +572,7 @@ function Player() {
 
 export default function Scene() {
   const mazeMatrix = useGameStore((s) => s.mazeMatrix);
+  const enemyPositions = useGameStore((s) => s.enemyPositions ?? []);
   const rows = mazeMatrix.length;
   const cols = mazeMatrix[0].length;
   return (
@@ -560,14 +593,11 @@ export default function Scene() {
           <Enemy key={enemy.id} enemy={enemy} />
         ))}
         <Food />
+        <VFXManager />
       </Physics>
 
       <Environment preset="city" />
-<<<<<<< HEAD
-      <ContactShadows position={[0, -0.001, 0]} opacity={0.4} scale={Math.max(COLS, ROWS) * CELL_SCALE} blur={2.3} far={16} />
-=======
       <ContactShadows position={[0, -0.001, 0]} opacity={0.4} scale={Math.max(cols, rows)} blur={2.3} far={16} />
->>>>>>> fd2a72e99d645e0092b19bad2568091e121877c8
     </>
   );
 }

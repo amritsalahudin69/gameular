@@ -18,3 +18,20 @@ body {
   overflow: hidden;
   background: #0b1316;
 }
+
+.game-over-card {
+  bottom: calc(184px + env(safe-area-inset-bottom));
+  width: min(78vw, 320px);
+  padding: 22px 24px;
+}
+.game-over-heading { margin-bottom: 12px; font-size: 24px; }
+.game-over-restart { padding: 12px 20px; }
+@media (max-width: 520px) {
+  .game-over-card {
+    --minimap-space: calc(clamp(120px, 36vw, 152px) + max(12px, env(safe-area-inset-right)) + 2px);
+    width: calc(100vw - var(--minimap-space) - var(--minimap-space));
+    padding: 6px 0;
+  }
+  .game-over-heading { margin-bottom: 6px; font-size: 14px; line-height: 1.2; }
+  .game-over-restart { width: 100%; min-height: 44px; padding: 8px 0; font-size: clamp(11px, 3.3vw, 13px); }
+}
