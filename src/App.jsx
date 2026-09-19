@@ -34,11 +34,32 @@ function Hud() {
   const startGame = useGameStore((s) => s.startGame);
   const mergeFeedback = useGameStore((s) => s.mergeFeedback);
   const finishFoodMerge = useGameStore((s) => s.finishFoodMerge);
-  const [gifFailed, setGifFailed] = useState(false);
+  const [failedGifPath, setFailedGifPath] = useState(null);
+  const resultGifPath = mergeFeedback ? `/assets/gif/${mergeFeedback.result}.gif` : null;
+  const foodValue = useGameStore((s) => s.currentFoodValue);
+
+  useEffect(() => {
+    if (gameState !== 'idle' && gameState !== 'gameover') return undefined;
+
+    const onStartShortcut = (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      startGame();
+    };
+
+    window.addEventListener('keydown', onStartShortcut);
+    return () => window.removeEventListener('keydown', onStartShortcut);
+  }, [gameState, startGame]);
+
+  useEffect(() => {
+    if (typeof foodValue !== 'number') return;
+    const image = new Image();
+    image.src = `/assets/gif/${currentValue + foodValue}.gif`;
+  }, [currentValue, foodValue]);
 
   useEffect(() => {
     if (!mergeFeedback) {
-      setGifFailed(false);
+      setFailedGifPath(null);
       return undefined;
     }
 
@@ -170,11 +191,12 @@ function Hud() {
             zIndex: 5,
           }}
         >
-          {!gifFailed ? (
+          {failedGifPath !== resultGifPath ? (
             <img
-              src={`/assets/effects/${mergeFeedback.result}.gif`}
+              key={resultGifPath}
+              src={resultGifPath}
               alt={`Merge result ${mergeFeedback.result}`}
-              onError={() => setGifFailed(true)}
+              onError={() => setFailedGifPath(resultGifPath)}
               style={{ width: '82%', height: '82%', objectFit: 'contain' }}
             />
           ) : (

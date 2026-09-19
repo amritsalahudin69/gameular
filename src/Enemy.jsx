@@ -45,7 +45,6 @@ export default function Enemy({ enemy }) {
   const levelConfig = useGameStore((s) => s.levelConfig);
   const syncEnemyPosition = useGameStore((s) => s.syncEnemyPosition);
   const gameOver = useGameStore((s) => s.gameOver);
-  const [enemyTexture, setEnemyTexture] = useState(null);
   const enemySprites = useMemo(() => (
     Array.isArray(levelConfig?.enemySprites)
       ? levelConfig.enemySprites.filter((path) => typeof path === 'string' && path.trim().length > 0)
@@ -59,11 +58,14 @@ export default function Enemy({ enemy }) {
   const enemySprite = enemySprites.length
     ? enemySprites[enemyIndex % enemySprites.length]
     : legacySprite;
+  const [enemyTexture, setEnemyTexture] = useState(() => enemyTextureCache.get(enemySprite) ?? null);
 
   useEffect(() => {
     let mounted = true;
-    setEnemyTexture(null);
-    if (!enemySprite) return () => { mounted = false; };
+    if (!enemySprite) {
+      setEnemyTexture(null);
+      return () => { mounted = false; };
+    }
 
     const cached = enemyTextureCache.get(enemySprite);
     if (cached !== undefined) {
@@ -73,7 +75,7 @@ export default function Enemy({ enemy }) {
 
     const pending = enemyTextureLoads.get(enemySprite);
     const onLoaded = (texture) => {
-      if (mounted) setEnemyTexture(texture && texture.isTexture ? texture : null);
+      if (mounted && texture?.isTexture) setEnemyTexture(texture);
     };
     if (pending) {
       pending.push(onLoaded);
@@ -85,6 +87,11 @@ export default function Enemy({ enemy }) {
       enemySprite,
       (texture) => {
         const safeTexture = texture && texture.isTexture ? texture : null;
+        if (safeTexture) {
+          safeTexture.magFilter = safeTexture.minFilter = THREE.NearestFilter;
+          safeTexture.generateMipmaps = false;
+          safeTexture.colorSpace = THREE.SRGBColorSpace;
+        }
         enemyTextureCache.set(enemySprite, safeTexture);
         const callbacks = enemyTextureLoads.get(enemySprite) || [];
         enemyTextureLoads.delete(enemySprite);
@@ -102,11 +109,9 @@ export default function Enemy({ enemy }) {
     return () => { mounted = false; };
   }, [enemySprite]);
 
-  const gridToWorld = (gx, gz) => new THREE.Vector3(
-    gx - (mazeMatrix[0].length - 1) / 2,
-    0.5,
-    gz - (mazeMatrix.length - 1) / 2,
-  );
+  const ox = (mazeMatrix[0].length - 1) / 2;
+  const oz = (mazeMatrix.length - 1) / 2;
+  const gridToWorld = (gx, gz) => new THREE.Vector3(gx - ox, 0.5, gz - oz);
 
   useEffect(() => {
     const position = enemy;
@@ -154,6 +159,9 @@ export default function Enemy({ enemy }) {
       visualFromRef.current, visualTargetRef.current, visualElapsedRef.current / ENEMY_STEP_INTERVAL,
     );
 
+    // A stalled frame gets at most one step and no leftover pre-stall debt.
+    // Normal frames retain their remainder to preserve the 0.32-second cadence.
+    if (delta >= ENEMY_STEP_INTERVAL) tickRef.current = 0;
     tickRef.current += Math.min(delta, ENEMY_STEP_INTERVAL);
     while (tickRef.current >= ENEMY_STEP_INTERVAL) {
       const live = useGameStore.getState();
@@ -171,16 +179,28 @@ export default function Enemy({ enemy }) {
         && gx < mazeMatrix[0].length
         && mazeMatrix[gz][gx] === 0
       );
-      const validDirections = DIRECTIONS.filter((direction) => (
+      const walkableDirections = DIRECTIONS.filter((direction) => (
         isWalkable(current.gx + direction.x, current.gz + direction.z)
       ));
-      if (!validDirections.length) {
+      if (!walkableDirections.length) {
         behaviorRef.current = 'ROAM';
         attackStepsRef.current = 0;
         cooldownStepsRef.current = ATTACK_COOLDOWN_STEPS;
         opportunityStepsRef.current = 0;
         continue;
       }
+
+      // Occupied cells are blocked too: let the existing direction selection
+      // use another available exit instead of retrying the same occupied cell.
+      const validDirections = walkableDirections.filter((direction) => (
+        !live.enemyPositions.some((other) => (
+          other.id !== enemy.id
+          && other.gx === current.gx + direction.x
+          && other.gz === current.gz + direction.z
+        ))
+      ));
+      // A temporary blockage consumes this tick, not an AI movement step.
+      if (!validDirections.length) continue;
 
       const player = useGameStore.getState().playerPosition;
       const playerGX = player
@@ -199,7 +219,8 @@ export default function Enemy({ enemy }) {
         && playerGZ !== null
       ) {
         opportunityStepsRef.current += 1;
-        const hasChoice = validDirections.length > 1;
+        // Preserve the existing wall-junction attack opportunity rule.
+        const hasChoice = walkableDirections.length > 1;
         if (opportunityStepsRef.current >= ATTACK_OPPORTUNITY_STEPS && hasChoice) {
           behaviorRef.current = 'ATTACK';
           attackStepsRef.current = ATTACK_STEP_LIMIT;
@@ -208,8 +229,8 @@ export default function Enemy({ enemy }) {
           dispatchEnemyAlert({
             enemyId: enemy.id,
             enemyPosition: {
-              x: current.x,
-              z: current.z,
+              x: current.gx - ox,
+              z: current.gz - oz,
               gx: current.gx,
               gz: current.gz,
             },
@@ -240,8 +261,8 @@ export default function Enemy({ enemy }) {
         dispatchEnemyAttack({
           enemyId: enemy.id,
           enemyPosition: {
-            x: current.x,
-            z: current.z,
+            x: current.gx - ox,
+            z: current.gz - oz,
             gx: current.gx,
             gz: current.gz,
           },
@@ -328,13 +349,15 @@ export default function Enemy({ enemy }) {
       position={[0, 0.5, 0]}
       name="maze-enemy"
     />
-    <group ref={visualRef} name={`enemy-visual-${enemy.id}`} position={[0, 0.5, 0]}>
+    <group ref={visualRef} name={`enemy-visual-${enemy.id}`} position={[0, 0.5, 0]} frustumCulled={false}>
       {enemyTexture ? (
-        <sprite position={[0, 0, 0]} scale={[0.9, 0.9, 1]}> //ukuran sprite disesuaikan dengan ukuran Nenemies
+        <sprite position={[0, 0, 0]} scale={[2, 2, 1.5]} renderOrder={10} frustumCulled={false}> {/* ukuran sprite disesuaikan dengan ukuran Nenemies */}
           <spriteMaterial
             attach="material"
             map={enemyTexture}
             transparent
+            alphaTest={0.1}
+            depthTest={false}
             depthWrite={false}
           />
         </sprite>

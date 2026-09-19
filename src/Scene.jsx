@@ -53,6 +53,9 @@ const loadNumberblockTexture = (value, onLoaded) => {
   textureLoader.load(
     url,
     (tex) => {
+      tex.magFilter = tex.minFilter = THREE.NearestFilter;
+      tex.generateMipmaps = false;
+      tex.colorSpace = THREE.SRGBColorSpace;
       textureCache.set(key, tex);
       const callbacks = pendingLoads.get(key) || [];
       pendingLoads.delete(key);
@@ -261,15 +264,28 @@ function Player() {
   // Numberblock head texture (based on authoritative currentValue)
   const currentValue = useGameStore((s) => s.currentValue);
   const headTexRef = useRef(null);
-  const [headTex, setHeadTex] = useState(null);
+  const [headTex, setHeadTex] = useState(() => textureCache.get(Number(currentValue)) ?? null);
+  const nextFoodValue = useGameStore((s) => s.currentFoodValue);
+  const nextVisualValue = mergeFeedback?.result ?? (
+    typeof nextFoodValue === 'number' ? currentValue + nextFoodValue : null
+  );
+
+  // Warm the existing cache before the fixed 420 ms merge completes.
+  useEffect(() => {
+    if (nextVisualValue !== null) loadNumberblockTexture(nextVisualValue, () => {});
+  }, [nextVisualValue]);
 
   useEffect(() => {
     let mounted = true;
-    setHeadTex(null);
+    // Keep the last decoded PNG until its replacement is ready.
     loadNumberblockTexture(currentValue, (tex) => {
       if (!mounted) return;
-      headTexRef.current = tex;
-      setHeadTex(tex);
+      // Keep the currently decoded sprite if a replacement fails. Falling
+      // back to a cube for one render creates a visible merge flicker.
+      if (tex) {
+        headTexRef.current = tex;
+        setHeadTex(tex);
+      }
     });
     return () => { mounted = false; };
   }, [currentValue]);
@@ -552,11 +568,18 @@ function Player() {
       >
         <CuboidCollider args={[0.38, 0.38, 0.38]} />
       </RigidBody>
-      <group ref={visualRef} name="player-visual" position={[0, 0.5, 0]}>
+      <group ref={visualRef} name="player-visual" position={[0, 0.5, 0]} frustumCulled={false}>
           {/* Head: use Numberblock sprite as primary when available, otherwise fallback to cube */}
           {headTex ? (
-            <sprite position={[0, 0, 0]} scale={[1.0, 1.0, 1]}> 
-              <spriteMaterial attach="material" map={headTex} transparent />
+            <sprite position={[0, 0, 0]} scale={[1.0, 1.0, 1]} renderOrder={10} frustumCulled={false}>
+              <spriteMaterial
+                attach="material"
+                map={headTex}
+                transparent
+                alphaTest={0.1}
+                depthWrite={false}
+                depthTest={false}
+              />
             </sprite>
           ) : (
             <mesh castShadow>
