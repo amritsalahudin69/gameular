@@ -2,6 +2,7 @@ import { useEffect, useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useVFXStore, VFX_EVENTS } from './VFXStore';
+import { useGameStore } from './Store';
 
 /**
  * VFXManager
@@ -25,47 +26,33 @@ const baseMaterial = new THREE.MeshStandardMaterial({
   toneMapped: false,
 });
 
+const ENEMY_ALERT_MS = 360;
+const ENEMY_ATTACK_MS = 160;
+const enemyPulseGeometry = new THREE.RingGeometry(0.66, 0.74, 24);
+const enemyAlertMaterial = new THREE.MeshBasicMaterial({
+  color: 0x22ddff, transparent: true, opacity: 0.85,
+  depthWrite: false, toneMapped: false,
+});
+const enemyAttackMaterial = new THREE.MeshBasicMaterial({
+  color: 0xff4466, transparent: true, opacity: 0.85,
+  depthWrite: false, toneMapped: false,
+});
+
 export default function VFXManager() {
   const activeVFX = useVFXStore((state) => state.activeVFX);
-  const playVFX = useVFXStore((state) => state.playVFX);
-  const completeVFX = useVFXStore((state) => state.completeVFX);
-
-  // Track which VFX are being processed to avoid race conditions
-  const processedRef = useRef(new Set());
-
-  // Transition spawn → play
+  // Reset synchronously at session boundaries, without touching merge timing.
   useEffect(() => {
-    Object.values(activeVFX).forEach((vfx) => {
-      if (vfx.state === 'spawn' && !processedRef.current.has(vfx.id)) {
-        processedRef.current.add(vfx.id);
-        // Immediately transition to play state
-        playVFX(vfx.id);
-      }
+    const clear = () => useVFXStore.getState().clearVFX();
+    const unsubscribe = useGameStore.subscribe((state, previous) => {
+      if (state.sessionId !== previous.sessionId || (
+        state.gameState === 'gameover' && previous.gameState !== 'gameover'
+      )) clear();
     });
-  }, [activeVFX, playVFX]);
-
-  // Cleanup: Auto-complete effects after duration
-  useEffect(() => {
-    const intervals = Object.values(activeVFX).map((vfx) => {
-      if (vfx.state === 'play') {
-        // Duration varies by effect type
-        let duration = 600; // default
-        if (vfx.type === VFX_EVENTS.FOOD_EAT) duration = 400;
-        if (vfx.type === VFX_EVENTS.MERGE_RESULT) duration = 600;
-
-        const timer = setTimeout(() => {
-          completeVFX(vfx.id);
-          processedRef.current.delete(vfx.id);
-        }, duration);
-        return { vfxId: vfx.id, timer };
-      }
-      return null;
-    }).filter(Boolean);
-
     return () => {
-      intervals.forEach(({ timer }) => clearTimeout(timer));
+      unsubscribe();
+      clear();
     };
-  }, [activeVFX, completeVFX]);
+  }, []);
 
   // Render VFX effects
   return (
@@ -83,6 +70,21 @@ export default function VFXManager() {
  * P21: Implements food/merge effects
  */
 function VFXEffect({ vfx }) {
+  const playVFX = useVFXStore((state) => state.playVFX);
+  const completeVFX = useVFXStore((state) => state.completeVFX);
+  const { id, type } = vfx;
+
+  // One lifetime per keyed instance, including events with no visual yet.
+  // Changes to other active events never restart this timer.
+  useEffect(() => {
+    playVFX(id);
+    const duration = type === VFX_EVENTS.FOOD_EAT ? 400
+      : type === VFX_EVENTS.ENEMY_ALERT ? ENEMY_ALERT_MS
+      : type === VFX_EVENTS.ENEMY_ATTACK ? ENEMY_ATTACK_MS : 600;
+    const timer = setTimeout(() => completeVFX(id), duration);
+    return () => clearTimeout(timer);
+  }, [id, type, playVFX, completeVFX]);
+
   switch (vfx.type) {
     case VFX_EVENTS.FOOD_EAT:
       return <FoodEatEffect vfx={vfx} />;
@@ -91,12 +93,10 @@ function VFXEffect({ vfx }) {
       return <MergeResultEffect vfx={vfx} />;
 
     case VFX_EVENTS.ENEMY_ALERT:
-      // P21+: Alert indicator
-      return null;
+      return <EnemyPulseEffect vfx={vfx} alert />;
 
     case VFX_EVENTS.ENEMY_ATTACK:
-      // P21+: Attack animation
-      return null;
+      return <EnemyPulseEffect vfx={vfx} />;
 
     case VFX_EVENTS.PLAYER_DEATH:
       // P21+: Death explosion
@@ -105,6 +105,40 @@ function VFXEffect({ vfx }) {
     default:
       return null;
   }
+}
+
+// A ground ring at the dispatched step origin; no gameplay/store writes.
+function EnemyPulseEffect({ vfx, alert = false }) {
+  const meshRef = useRef(null);
+  const startRef = useRef(Date.now());
+  const duration = alert ? ENEMY_ALERT_MS : ENEMY_ATTACK_MS;
+
+  useFrame(() => {
+    const mesh = meshRef.current;
+    if (!mesh) return;
+    const progress = Math.min((Date.now() - startRef.current) / duration, 1);
+    mesh.visible = progress < 1;
+    mesh.scale.setScalar(alert
+      ? 0.65 + Math.sin(progress * Math.PI) * 0.45
+      : 0.35 + progress * 0.65);
+  });
+
+  const position = vfx.enemyPosition;
+  if (!Number.isFinite(position?.x) || !Number.isFinite(position?.z)) return null;
+
+  return (
+    <mesh
+      ref={meshRef}
+      name={`enemy-${alert ? 'alert' : 'attack'}-${vfx.id}`}
+      position={[position.x, 0.04, position.z]}
+      rotation={[-Math.PI / 2, 0, 0]}
+      scale={alert ? 0.65 : 0.35}
+      renderOrder={1}
+    >
+      <primitive object={enemyPulseGeometry} attach="geometry" />
+      <primitive object={alert ? enemyAlertMaterial : enemyAttackMaterial} attach="material" />
+    </mesh>
+  );
 }
 
 /**

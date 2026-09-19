@@ -25,7 +25,7 @@ const generateVFXId = () => {
  * Active VFX are stored with unique IDs.
  * When an effect completes, it's automatically removed.
  */
-export const useVFXStore = create((set) => ({
+export const useVFXStore = create((set, get) => ({
   // Map of active VFX: { vfxId → vfx event data }
   activeVFX: {},
 
@@ -33,9 +33,9 @@ export const useVFXStore = create((set) => ({
    * Spawn a VFX effect
    * Returns the unique vfxId for tracking
    */
-  spawnVFX: (eventType, data) =>
+  spawnVFX: (eventType, data) => {
+    const vfxId = generateVFXId();
     set((state) => {
-      const vfxId = generateVFXId();
       const vfx = {
         id: vfxId,
         type: eventType,
@@ -50,14 +50,16 @@ export const useVFXStore = create((set) => ({
           [vfxId]: vfx,
         },
       };
-    }),
+    });
+    return vfxId;
+  },
 
   /**
    * Mark a VFX as playing (after spawn)
    */
   playVFX: (vfxId) =>
     set((state) => {
-      if (!state.activeVFX[vfxId]) return state;
+      if (state.activeVFX[vfxId]?.state !== 'spawn') return state;
       return {
         activeVFX: {
           ...state.activeVFX,
@@ -75,6 +77,7 @@ export const useVFXStore = create((set) => ({
    */
   completeVFX: (vfxId) =>
     set((state) => {
+      if (!state.activeVFX[vfxId]) return state;
       const { [vfxId]: _, ...rest } = state.activeVFX;
       return { activeVFX: rest };
     }),
@@ -83,15 +86,14 @@ export const useVFXStore = create((set) => ({
    * Clear all active VFX
    * Used on game reset/restart
    */
-  clearVFX: () => set({ activeVFX: {} }),
+  clearVFX: () => set((state) => (
+    Object.keys(state.activeVFX).length ? { activeVFX: {} } : state
+  )),
 
   /**
    * Get count of active VFX (for diagnostics/testing)
    */
-  getActiveVFXCount: () => {
-    // Note: This returns a selector, actual implementation in component
-    return 0;
-  },
+  getActiveVFXCount: () => Object.keys(get().activeVFX).length,
 }));
 
 /**

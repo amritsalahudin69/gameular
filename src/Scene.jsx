@@ -214,7 +214,7 @@ function Food() {
       <CuboidCollider args={[0.3, 0.3, 0.3]} sensor />
 
       {texState ? (
-        <sprite position={[0, 0, 0]} scale={[2, 2, 2.6]}>  //ukuran sprite disesuaikan dengan ukuran Numberblock
+        <sprite position={[0, 0, 0]} scale={[2, 2, 2.6]}>  //ukuran food sprite disesuaikan dengan ukuran Numberblock
           <spriteMaterial attach="material" map={texState} transparent />
         </sprite>
       ) : (
@@ -568,10 +568,10 @@ function Player() {
       >
         <CuboidCollider args={[0.38, 0.38, 0.38]} />
       </RigidBody>
-      <group ref={visualRef} name="player-visual" position={[0, 0.5, 0]} frustumCulled={false}>
+      <group ref={visualRef} name="player-visual" position={[0, 0.5, 0]} frustumCulled={false}>//ukuran gacoan  visual disesuaikan dengan ukuran Numberblock
           {/* Head: use Numberblock sprite as primary when available, otherwise fallback to cube */}
           {headTex ? (
-            <sprite position={[0, 0, 0]} scale={[1.0, 1.0, 1]} renderOrder={10} frustumCulled={false}>
+            <sprite position={[0, 0, 0]} scale={[2.0, 2.0, 1]} renderOrder={10} frustumCulled={false}>
               <spriteMaterial
                 attach="material"
                 map={headTex}
