@@ -160,6 +160,7 @@ const getWalkableFromMatrix = (matrix) => {
 };
 
 const positionKey = (position) => (position ? `${position.gx},${position.gz}` : null);
+const MAX_ENEMIES = 20;
 
 const normalizeEnemyCount = (value) => {
   if (value === undefined || value === null || value === '') return 1;
