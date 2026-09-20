@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { RigidBody } from '@react-three/rapier';
 import * as THREE from 'three';
@@ -22,7 +22,7 @@ const DIRECTIONS = [
 const sameDirection = (a, b) => a.x === b.x && a.z === b.z;
 const reverseDirection = (direction) => ({ x: -direction.x, z: -direction.z });
 
-export default function Enemy({ enemy }) {
+export default function Enemy({ enemy, spritePath }) {
   const bodyRef = useRef(null);
   const visualRef = useRef(null);
   const visualFromRef = useRef(new THREE.Vector3());
@@ -45,35 +45,22 @@ export default function Enemy({ enemy }) {
   const levelConfig = useGameStore((s) => s.levelConfig);
   const syncEnemyPosition = useGameStore((s) => s.syncEnemyPosition);
   const gameOver = useGameStore((s) => s.gameOver);
-  const enemySprites = useMemo(() => (
-    Array.isArray(levelConfig?.enemySprites)
-      ? levelConfig.enemySprites.filter((path) => typeof path === 'string' && path.trim().length > 0)
-      : []
-  ), [levelConfig?.enemySprites]);
-  // Spawn IDs keep their original index across movement and restart.
-  const enemyIndex = Number(/^enemy-(\d+)$/.exec(enemy?.id ?? '')?.[1] ?? 0);
-  const legacySprite = typeof levelConfig?.enemySprite === 'string' && levelConfig.enemySprite.trim()
-    ? levelConfig.enemySprite.trim()
-    : null;
-  const enemySprite = enemySprites.length
-    ? enemySprites[enemyIndex % enemySprites.length]
-    : legacySprite;
-  const [enemyTexture, setEnemyTexture] = useState(() => enemyTextureCache.get(enemySprite) ?? null);
+  const [enemyTexture, setEnemyTexture] = useState(() => enemyTextureCache.get(spritePath) ?? null);
 
   useEffect(() => {
     let mounted = true;
-    if (!enemySprite) {
+    if (!spritePath) {
       setEnemyTexture(null);
       return () => { mounted = false; };
     }
 
-    const cached = enemyTextureCache.get(enemySprite);
+    const cached = enemyTextureCache.get(spritePath);
     if (cached !== undefined) {
       setEnemyTexture(cached);
       return () => { mounted = false; };
     }
 
-    const pending = enemyTextureLoads.get(enemySprite);
+    const pending = enemyTextureLoads.get(spritePath);
     const onLoaded = (texture) => {
       if (mounted && texture?.isTexture) setEnemyTexture(texture);
     };
@@ -82,9 +69,9 @@ export default function Enemy({ enemy }) {
       return () => { mounted = false; };
     }
 
-    enemyTextureLoads.set(enemySprite, [onLoaded]);
+    enemyTextureLoads.set(spritePath, [onLoaded]);
     textureLoader.load(
-      enemySprite,
+      spritePath,
       (texture) => {
         const safeTexture = texture && texture.isTexture ? texture : null;
         if (safeTexture) {
@@ -92,22 +79,22 @@ export default function Enemy({ enemy }) {
           safeTexture.generateMipmaps = false;
           safeTexture.colorSpace = THREE.SRGBColorSpace;
         }
-        enemyTextureCache.set(enemySprite, safeTexture);
-        const callbacks = enemyTextureLoads.get(enemySprite) || [];
-        enemyTextureLoads.delete(enemySprite);
+        enemyTextureCache.set(spritePath, safeTexture);
+        const callbacks = enemyTextureLoads.get(spritePath) || [];
+        enemyTextureLoads.delete(spritePath);
         callbacks.forEach((callback) => callback(safeTexture));
       },
       undefined,
       () => {
-        enemyTextureCache.set(enemySprite, null);
-        const callbacks = enemyTextureLoads.get(enemySprite) || [];
-        enemyTextureLoads.delete(enemySprite);
+        enemyTextureCache.set(spritePath, null);
+        const callbacks = enemyTextureLoads.get(spritePath) || [];
+        enemyTextureLoads.delete(spritePath);
         callbacks.forEach((callback) => callback(null));
       },
     );
 
     return () => { mounted = false; };
-  }, [enemySprite]);
+  }, [spritePath]);
 
   const ox = (mazeMatrix[0].length - 1) / 2;
   const oz = (mazeMatrix.length - 1) / 2;

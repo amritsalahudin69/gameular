@@ -596,6 +596,7 @@ function Player() {
 export default function Scene() {
   const mazeMatrix = useGameStore((s) => s.mazeMatrix);
   const enemyPositions = useGameStore((s) => s.enemyPositions ?? []);
+  const enemySprites = useGameStore((s) => s.levelConfig?.enemySprites ?? []);
   const rows = mazeMatrix.length;
   const cols = mazeMatrix[0].length;
   return (
@@ -612,8 +613,12 @@ export default function Scene() {
       <Physics gravity={[0, -9.81, 0]}>
         <Map />
         <Player />
-        {enemyPositions.map((enemy) => (
-          <Enemy key={enemy.id} enemy={enemy} />
+        {enemyPositions.map((enemy, index) => (
+          <Enemy
+            key={enemy.id}
+            enemy={enemy}
+            spritePath={enemySprites.length ? enemySprites[index % enemySprites.length] : null}
+          />
         ))}
         <Food />
         <VFXManager />

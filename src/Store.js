@@ -292,6 +292,7 @@ export const useGameStore = create((set) => ({
   elapsedTime: 0,
   highScore: readNumber(HIGH_SCORE_KEY, 0),
   gameState: 'idle',
+  sessionId: 0,
   currentLevel: initialLevel,
   mazeMatrix: initialMaze,
   // level/session deterministic config
@@ -310,6 +311,7 @@ export const useGameStore = create((set) => ({
     set((state) => {
       const startValue = (state.levelConfig && state.levelConfig.startValue) || 1;
       return {
+        sessionId: state.sessionId + 1,
         gameState: 'playing',
         score: 0,
         elapsedTime: 0,
