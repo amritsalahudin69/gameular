@@ -8,7 +8,7 @@ import {
   RigidBody,
 } from '@react-three/rapier';
 import * as THREE from 'three';
-import { SKIN_PRESETS, useGameStore } from './Store';
+import { getLogicalGridCell, SKIN_PRESETS, useGameStore } from './Store';
 import { dispatchFoodEat } from './VFXStore';
 import Enemy from './Enemy.jsx';
 import VFXManager from './VFXManager.jsx';
@@ -423,6 +423,30 @@ function Player() {
       return;
     }
 
+    const currentPlayerCell = getLogicalGridCell(curGridRef.current, mazeMatrix);
+    const overlappingEnemy = (state.enemyPositions || []).find((enemy) => {
+      const enemyCell = getLogicalGridCell(enemy, mazeMatrix);
+      return enemyCell
+        && currentPlayerCell
+        && enemyCell.gx === currentPlayerCell.gx
+        && enemyCell.gz === currentPlayerCell.gz;
+    });
+    if (overlappingEnemy) {
+      console.warn('[GAME_OVER]', {
+        reason: 'ENEMY_COLLISION',
+        source: 'PLAYER_OVERLAP',
+        player: currentPlayerCell,
+        enemy: getLogicalGridCell(overlappingEnemy, mazeMatrix),
+        enemyId: overlappingEnemy.id,
+      });
+      dispatchPlayerDeath({
+        playerPosition: state.playerPosition,
+        currentValue: state.currentValue,
+      });
+      gameOver();
+      return;
+    }
+
     // Rendering is independent of the authoritative grid and Rapier's interpolation.
     visualElapsedRef.current = Math.min(stepInterval, visualElapsedRef.current + delta);
     visualRef.current.position.lerpVectors(
@@ -519,7 +543,22 @@ function Player() {
       useGameStore.getState().syncPlayerPosition(playerWorld);
 
       const enemies = useGameStore.getState().enemyPositions || [];
-      if (enemies.some((enemy) => enemy.gx === candidateGX && enemy.gz === candidateGZ)) {
+      const collidedEnemy = enemies.find((enemy) => {
+        const enemyCell = getLogicalGridCell(enemy, mazeMatrix);
+        return enemyCell?.gx === candidateGX && enemyCell?.gz === candidateGZ;
+      });
+      if (collidedEnemy) {
+        console.warn('[GAME_OVER]', {
+          reason: 'ENEMY_COLLISION',
+          source: 'PLAYER_TO_ENEMY',
+          player: { gx: candidateGX, gz: candidateGZ },
+          enemy: getLogicalGridCell(collidedEnemy, mazeMatrix),
+          enemyId: collidedEnemy.id,
+        });
+        dispatchPlayerDeath({
+          playerPosition: playerWorld,
+          currentValue: useGameStore.getState().currentValue,
+        });
         gameOver();
         return;
       }

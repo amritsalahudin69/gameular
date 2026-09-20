@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { RigidBody } from '@react-three/rapier';
 import * as THREE from 'three';
-import { useGameStore } from './Store';
+import { getLogicalGridCell, useGameStore } from './Store';
 import { dispatchEnemyAlert, dispatchEnemyAttack, dispatchPlayerDeath } from './VFXStore';
 
 const enemyTextureCache = new Map();
@@ -137,6 +137,29 @@ export default function Enemy({ enemy, spritePath }) {
     if (!rb || !enemy || state.sessionId !== sessionId || readySessionRef.current !== sessionId) return;
     if (state.gameState !== 'playing' || state.mergeFeedback) {
       tickRef.current = 0;
+      return;
+    }
+
+    const currentEnemyCell = getLogicalGridCell(curGridRef.current, mazeMatrix);
+    const currentPlayerCell = getLogicalGridCell(state.playerPosition, mazeMatrix);
+    if (
+      currentEnemyCell
+      && currentPlayerCell
+      && currentEnemyCell.gx === currentPlayerCell.gx
+      && currentEnemyCell.gz === currentPlayerCell.gz
+    ) {
+      console.warn('[GAME_OVER]', {
+        reason: 'ENEMY_COLLISION',
+        source: 'ENEMY_OVERLAP',
+        player: currentPlayerCell,
+        enemy: currentEnemyCell,
+        enemyId: enemy.id,
+      });
+      dispatchPlayerDeath({
+        playerPosition: state.playerPosition,
+        currentValue: state.currentValue,
+      });
+      gameOver();
       return;
     }
 
@@ -292,16 +315,28 @@ export default function Enemy({ enemy, spritePath }) {
       if (committed.sessionId !== sessionId || committed.gameState !== 'playing' || committed.mergeFeedback) return;
       const committedEnemy = committed.enemyPositions.find((position) => position.id === enemy.id);
       const committedPlayer = committed.playerPosition;
-      const committedPlayerGX = committedPlayer.gx ?? committedPlayer.x + (mazeMatrix[0].length - 1) / 2;
-      const committedPlayerGZ = committedPlayer.gz ?? committedPlayer.z + (mazeMatrix.length - 1) / 2;
-      if (committedEnemy?.gx === committedPlayerGX && committedEnemy?.gz === committedPlayerGZ) {
+      const committedEnemyCell = getLogicalGridCell(committedEnemy, mazeMatrix);
+      const committedPlayerCell = getLogicalGridCell(committed.playerPosition, mazeMatrix);
+      if (
+        committedEnemyCell
+        && committedPlayerCell
+        && committedEnemyCell.gx === committedPlayerCell.gx
+        && committedEnemyCell.gz === committedPlayerCell.gz
+      ) {
+        console.warn('[GAME_OVER]', {
+          reason: 'ENEMY_COLLISION',
+          source: 'ENEMY_TO_PLAYER',
+          player: committedPlayerCell,
+          enemy: committedEnemyCell,
+          enemyId: enemy.id,
+        });
         // Dispatch PLAYER_DEATH VFX event
         dispatchPlayerDeath({
           playerPosition: {
             x: committedPlayer.x,
             z: committedPlayer.z,
-            gx: committedPlayerGX,
-            gz: committedPlayerGZ,
+            gx: committedPlayerCell.gx,
+            gz: committedPlayerCell.gz,
           },
           currentValue: committed.currentValue,
         });

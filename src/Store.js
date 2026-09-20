@@ -162,6 +162,17 @@ const getWalkableFromMatrix = (matrix) => {
 const positionKey = (position) => (position ? `${position.gx},${position.gz}` : null);
 const MAX_ENEMIES = 20;
 
+export const getLogicalGridCell = (position, matrix) => {
+  if (!position || !matrix?.length || !matrix[0]?.length) return null;
+  const ox = (matrix[0].length - 1) / 2;
+  const oz = (matrix.length - 1) / 2;
+  const gx = position.gx ?? position.x + ox;
+  const gz = position.gz ?? position.z + oz;
+  return Number.isFinite(gx) && Number.isFinite(gz)
+    ? { gx: Math.round(gx), gz: Math.round(gz) }
+    : null;
+};
+
 const normalizeEnemyCount = (value) => {
   if (value === undefined || value === null || value === '') return 1;
   const parsed = Number(value);
