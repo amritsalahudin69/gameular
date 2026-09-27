@@ -1,14 +1,14 @@
 {
   "id": "snake-level-1",
-  "startValue": 40,
+  "startValue": 10,
   "enemyCount": 9,
   "enemySprite": "/assets/numberblocks/1.png",
   "stepIntervalSec": 0.18,
   "foods": [
-    40,
-    100,
-    50,
-    20
+    20,
+    500,
+    310,
+    10
   ],
   "enemySprites": [
     "/assets/numberblocks/totok.png",
