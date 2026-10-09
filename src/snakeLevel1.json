@@ -1,23 +1,24 @@
 {
   "id": "snake-level-1",
-
-  "startValue": 1,
-
-  "foods": [1, 2, 45, 10, 2, 3, 1, 2, 4, 1],
-
-  "gameplay": {
-    "stepIntervalSec": 0.18
-  },
-
-  "visual": {
-    "headScale": 1.0,
-    "bodyScale": 0.42,
-    "foodScale": 0.9,
-    "floorColor": "#24312f",
-    "wallColor": "#5a7367"
-  },
-
-  "maze": {
-    "level": 2
-  }
+  "startValue": 10,
+  "enemyCount": 9,
+  "enemySprite": "/assets/numberblocks/1.png",
+  "stepIntervalSec": 0.18,
+  "foods": [
+    20,
+    500,
+    310,
+    10
+  ],
+  "enemySprites": [
+    "/assets/numberblocks/totok.png",
+    "/assets/numberblocks/joko.png",
+    "/assets/numberblocks/jono.png",
+    "/assets/numberblocks/rangga.png",
+    "/assets/numberblocks/lukman.png",
+    "/assets/numberblocks/alif.png",
+    "/assets/numberblocks/galih.png",
+    "/assets/numberblocks/samsul.png",
+    "/assets/numberblocks/arya.png"
+  ]
 }

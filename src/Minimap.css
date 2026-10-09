@@ -1,0 +1,22 @@
+.minimap {
+  position: fixed;
+  right: max(12px, env(safe-area-inset-right));
+  bottom: calc(18px + env(safe-area-inset-bottom));
+  width: 152px;
+  padding: 5px;
+  border: 1px solid #73918c;
+  border-radius: 8px;
+  background: rgba(4, 18, 24, 0.94);
+  pointer-events: none;
+  z-index: 2;
+}
+.minimap svg { display: block; width: 100%; height: auto; }
+.minimap-legend { display: flex; justify-content: space-between; gap: 4px; margin-top: 5px; color: #ecfeff; font: 9px/1.2 ui-monospace, monospace; }
+.minimap-legend span { display: flex; align-items: center; gap: 3px; }
+.minimap-legend i { display: inline-block; width: 6px; height: 6px; }
+.minimap-player { background: #22d3ee; border-radius: 50%; }
+.minimap-food { background: #fde047; transform: rotate(45deg); }
+.minimap-enemy { background: #fb7185; }
+@media (max-width: 520px) {
+  .minimap { width: clamp(120px, 36vw, 152px); bottom: calc(184px + env(safe-area-inset-bottom)); }
+}

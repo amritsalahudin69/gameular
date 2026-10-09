@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
-import { ContactShadows, Environment, useKeyboardControls } from '@react-three/drei';
+import { ContactShadows, Environment, useTexture } from '@react-three/drei';
 import {
   CuboidCollider,
   InstancedRigidBodies,
@@ -8,7 +8,10 @@ import {
   RigidBody,
 } from '@react-three/rapier';
 import * as THREE from 'three';
-import { SKIN_PRESETS, useGameStore } from './Store';
+import { getLogicalGridCell, SKIN_PRESETS, useGameStore } from './Store';
+import { dispatchFoodEat } from './VFXStore';
+import Enemy from './Enemy.jsx';
+import VFXManager from './VFXManager.jsx';
 
 // Simple texture cache and loader for Numberblocks PNGs.
 // textureCache: key -> THREE.Texture | null (failed)
@@ -50,6 +53,9 @@ const loadNumberblockTexture = (value, onLoaded) => {
   textureLoader.load(
     url,
     (tex) => {
+      tex.magFilter = tex.minFilter = THREE.NearestFilter;
+      tex.generateMipmaps = false;
+      tex.colorSpace = THREE.SRGBColorSpace;
       textureCache.set(key, tex);
       const callbacks = pendingLoads.get(key) || [];
       pendingLoads.delete(key);
@@ -70,52 +76,107 @@ const CAMERA_BASE = new THREE.Vector3(0, 7.5, 8.5);
 
 function Map() {
   const mazeMatrix = useGameStore((s) => s.mazeMatrix);
-  const levelConfig = useGameStore((s) => s.levelConfig);
+  const floorTexture = useTexture('/sprite/lantai.png');
+  const borderTexture = useTexture('/sprite/wall-border.png');
+  const obstacleTexture = useTexture('/sprite/wall-rintangan.png');
 
-  // color config with safe fallbacks and trimming
-  const rawFloor = levelConfig && levelConfig.visual && levelConfig.visual.floorColor;
-  const rawWall = levelConfig && levelConfig.visual && levelConfig.visual.wallColor;
-  const floorColor = typeof rawFloor === 'string' ? rawFloor.trim() || '#24312f' : '#24312f';
-  const wallColor = typeof rawWall === 'string' ? rawWall.trim() || '#5a7367' : '#5a7367';
-
-  const instances = useMemo(() => {
+  const { boundaryInstances, obstacleInstances } = useMemo(() => {
     const rows = mazeMatrix.length;
     const cols = mazeMatrix[0].length;
     const ox = (cols - 1) / 2;
     const oz = (rows - 1) / 2;
-    const data = [];
+    const boundaryData = [];
+    const obstacleData = [];
 
     for (let z = 0; z < rows; z += 1) {
       for (let x = 0; x < cols; x += 1) {
         if (mazeMatrix[z][x] === 1) {
-          data.push({
+          const isBoundary = z === 0 || z === rows - 1 || x === 0 || x === cols - 1;
+          const wall = {
             key: `wall-${x}-${z}`,
             position: [x - ox, 0.5, z - oz],
             rotation: [0, 0, 0],
             scale: [1, 1, 1],
-          });
+          };
+          if (isBoundary) {
+            boundaryData.push(wall);
+          } else {
+            obstacleData.push(wall);
+          }
         }
       }
     }
 
-    return { data, rows, cols, ox, oz };
+    const sphere = new THREE.Sphere(new THREE.Vector3(0, 0.5, 0), Math.hypot(cols, 1, rows) / 2);
+    return {
+      boundaryInstances: {
+        data: boundaryData,
+        rows,
+        cols,
+        key: THREE.MathUtils.generateUUID(),
+        boundingSphere: sphere,
+      },
+      obstacleInstances: {
+        data: obstacleData,
+        key: THREE.MathUtils.generateUUID(),
+        boundingSphere: sphere,
+      },
+    };
   }, [mazeMatrix]);
 
   const rows = mazeMatrix.length;
   const cols = mazeMatrix[0].length;
+
+  useLayoutEffect(() => {
+    // Floor texture
+    const tileWidth = 4;
+    const tileHeight = tileWidth * floorTexture.image.height / floorTexture.image.width;
+    floorTexture.wrapS = floorTexture.wrapT = THREE.RepeatWrapping;
+    floorTexture.repeat.set(cols / tileWidth, rows / tileHeight);
+    floorTexture.magFilter = THREE.NearestFilter;
+    floorTexture.minFilter = THREE.NearestFilter;
+    floorTexture.generateMipmaps = false;
+    floorTexture.colorSpace = THREE.SRGBColorSpace;
+    floorTexture.needsUpdate = true;
+  }, [floorTexture, cols, rows]);
+
+  useLayoutEffect(() => {
+    // Wall textures: one tile per wall unit
+    [borderTexture, obstacleTexture].forEach((texture) => {
+      texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+      texture.repeat.set(1, 1);
+      texture.magFilter = THREE.NearestFilter;
+      texture.minFilter = THREE.NearestFilter;
+      texture.generateMipmaps = false;
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.needsUpdate = true;
+    });
+  }, [borderTexture, obstacleTexture]);
+
   return (
     <group>
       <mesh receiveShadow position={[0, -0.01, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[cols, rows]} />
-        <meshStandardMaterial color={floorColor} roughness={0.95} metalness={0.05} />
+        <meshStandardMaterial map={floorTexture} color="#ffffff" transparent alphaTest={0.01} roughness={0.95} metalness={0.05} />
       </mesh>
 
-      <InstancedRigidBodies instances={instances.data} type="fixed" colliders="cuboid">
-        <instancedMesh castShadow receiveShadow args={[null, null, instances.data.length]}>
-          <boxGeometry args={[1, 1, 1]} />
-          <meshStandardMaterial color={wallColor} roughness={0.8} metalness={0.08} />
-        </instancedMesh>
-      </InstancedRigidBodies>
+      {boundaryInstances.data.length > 0 && (
+        <InstancedRigidBodies key={boundaryInstances.key} instances={boundaryInstances.data} type="fixed" colliders="cuboid">
+          <instancedMesh castShadow receiveShadow boundingSphere={boundaryInstances.boundingSphere} args={[null, null, boundaryInstances.data.length]}>
+            <boxGeometry args={[1, 1, 1]} />
+            <meshStandardMaterial map={borderTexture} color="#ffffff" roughness={0.8} metalness={0.08} />
+          </instancedMesh>
+        </InstancedRigidBodies>
+      )}
+
+      {obstacleInstances.data.length > 0 && (
+        <InstancedRigidBodies key={obstacleInstances.key} instances={obstacleInstances.data} type="fixed" colliders="cuboid">
+          <instancedMesh castShadow receiveShadow boundingSphere={obstacleInstances.boundingSphere} args={[null, null, obstacleInstances.data.length]}>
+            <boxGeometry args={[1, 1, 1]} />
+            <meshStandardMaterial map={obstacleTexture} color="#ffffff" roughness={0.8} metalness={0.08} />
+          </instancedMesh>
+        </InstancedRigidBodies>
+      )}
     </group>
   );
 }
@@ -123,8 +184,6 @@ function Map() {
 function Food() {
   const foodPosition = useGameStore((s) => s.foodPosition);
   const currentFoodValue = useGameStore((s) => s.currentFoodValue);
-  const levelConfig = useGameStore((s) => s.levelConfig);
-  const foodScale = (levelConfig && levelConfig.visual && typeof levelConfig.visual.foodScale === 'number') ? levelConfig.visual.foodScale : 0.9;
 
   // texture state per food value
   const texRef = useRef(null);
@@ -155,7 +214,7 @@ function Food() {
       <CuboidCollider args={[0.3, 0.3, 0.3]} sensor />
 
       {texState ? (
-        <sprite position={[0, 0, 0]} scale={[foodScale, foodScale, 1]}> 
+        <sprite position={[0, 0, 0]} scale={[2, 2, 2.6]}>  //ukuran food sprite disesuaikan dengan ukuran Numberblock
           <spriteMaterial attach="material" map={texState} transparent />
         </sprite>
       ) : (
@@ -170,9 +229,12 @@ function Food() {
 
 function Player() {
   const bodyRef = useRef(null);
-  const segmentRefs = useRef([]);
-  const gridHistoryRef = useRef([]); // array of {gx,gz}
+  const visualRef = useRef(null);
+  const visualFromRef = useRef(new THREE.Vector3());
+  const visualTargetRef = useRef(new THREE.Vector3());
+  const visualElapsedRef = useRef(0);
   const tickRef = useRef(0);
+  const readySessionRef = useRef(null);
   const elapsedRef = useRef(0);
   const elapsedSyncRef = useRef(0);
   const dirRef = useRef({ x: 0, z: 1 }); // committed grid direction
@@ -180,22 +242,15 @@ function Player() {
   const prevGridRef = useRef({ gx: 0, gz: 0 });
   const curGridRef = useRef({ gx: 0, gz: 0 });
   const interpRef = useRef(1);
-  const newTailHoldRef = useRef(null); // { index, gx, gz } to stabilize new-tail visuals for one interval
-
-  const segmentCount = useGameStore((s) => Math.max(0, s.snakeSegments.length - 1));
   const gameState = useGameStore((s) => s.gameState);
+  const mergeFeedback = useGameStore((s) => s.mergeFeedback);
+  const sessionId = useGameStore((s) => s.sessionId);
   const gameOver = useGameStore((s) => s.gameOver);
   const selectedSkin = useGameStore((s) => s.selectedSkin);
   const setElapsedTime = useGameStore((s) => s.setElapsedTime);
   const mazeMatrix = useGameStore((s) => s.mazeMatrix);
   const levelConfig = useGameStore((s) => s.levelConfig);
-  // canonical speed source: gameplay.stepIntervalSec -> legacy stepIntervalSec -> fallback
-  const configured = levelConfig && levelConfig.gameplay && levelConfig.gameplay.stepIntervalSec;
-  const legacy = levelConfig && levelConfig.stepIntervalSec;
-  const stepInterval = Number.isFinite(configured) && configured > 0
-    ? configured
-    : (Number.isFinite(legacy) && legacy > 0 ? legacy : STEP_INTERVAL);
-  const [, getKeys] = useKeyboardControls();
+  const stepInterval = (levelConfig && levelConfig.stepIntervalSec) || STEP_INTERVAL;
   const { camera } = useThree();
   const skin = SKIN_PRESETS[selectedSkin] ?? SKIN_PRESETS.classic;
 
@@ -209,19 +264,28 @@ function Player() {
   // Numberblock head texture (based on authoritative currentValue)
   const currentValue = useGameStore((s) => s.currentValue);
   const headTexRef = useRef(null);
-  const [headTex, setHeadTex] = useState(null);
+  const [headTex, setHeadTex] = useState(() => textureCache.get(Number(currentValue)) ?? null);
+  const nextFoodValue = useGameStore((s) => s.currentFoodValue);
+  const nextVisualValue = mergeFeedback?.result ?? (
+    typeof nextFoodValue === 'number' ? currentValue + nextFoodValue : null
+  );
 
-  // visual scales from level config with safe fallbacks
-  const headScale = (levelConfig && levelConfig.visual && typeof levelConfig.visual.headScale === 'number') ? levelConfig.visual.headScale : 1.0;
-  const bodyScale = (levelConfig && levelConfig.visual && typeof levelConfig.visual.bodyScale === 'number') ? levelConfig.visual.bodyScale : 0.42;
+  // Warm the existing cache before the fixed 420 ms merge completes.
+  useEffect(() => {
+    if (nextVisualValue !== null) loadNumberblockTexture(nextVisualValue, () => {});
+  }, [nextVisualValue]);
 
   useEffect(() => {
     let mounted = true;
-    setHeadTex(null);
+    // Keep the last decoded PNG until its replacement is ready.
     loadNumberblockTexture(currentValue, (tex) => {
       if (!mounted) return;
-      headTexRef.current = tex;
-      setHeadTex(tex);
+      // Keep the currently decoded sprite if a replacement fails. Falling
+      // back to a cube for one render creates a visible merge flicker.
+      if (tex) {
+        headTexRef.current = tex;
+        setHeadTex(tex);
+      }
     });
     return () => { mounted = false; };
   }, [currentValue]);
@@ -233,75 +297,64 @@ function Player() {
   }, [camera]);
 
   useEffect(() => {
-    if (gameState !== 'playing') return;
     // Reset runtime session-local refs to avoid leakage between runs
+    readySessionRef.current = sessionId;
     tickRef.current = 0;
     elapsedRef.current = 0;
     elapsedSyncRef.current = 0;
     dirRef.current = { x: 0, z: 1 }; // initial committed direction
     pendingDirRef.current = null;
-    newTailHoldRef.current = null;
 
-    // Initialize grid positions from current stored snake segments (head first)
-    const snake = useGameStore.getState().snakeSegments || [];
-    const headWorld = snake[0] ?? { x: 0, y: 0.5, z: 0 };
+    const headWorld = useGameStore.getState().playerPosition ?? { x: 0, y: 0.5, z: 0 };
     const headGX = Math.round(headWorld.x + ox);
     const headGZ = Math.round(headWorld.z + oz);
 
-    // Build full initial history: head, body1, body2, ... in grid coords
-    const initialHistory = snake.map((s) => ({ gx: Math.round(s.x + ox), gz: Math.round(s.z + oz) }));
-    // Ensure at least head exists
-    if (initialHistory.length === 0) initialHistory.push({ gx: headGX, gz: headGZ });
-
-    prevGridRef.current = { ...initialHistory[0] };
-    curGridRef.current = { ...initialHistory[0] };
+    prevGridRef.current = { gx: headGX, gz: headGZ };
+    curGridRef.current = { gx: headGX, gz: headGZ };
     interpRef.current = 1;
-    gridHistoryRef.current = initialHistory.slice();
 
-    // Place visual segments exactly on their logical grid cells
-    segmentRefs.current.forEach((segment, i) => {
-      if (!segment) return;
-      const hist = gridHistoryRef.current[i + 1] ?? { gx: headGX, gz: headGZ - (i + 1) };
-      const p = gridToWorld(hist.gx, hist.gz);
-      segment.position.set(p.x, p.y, p.z);
-    });
-
-    bodyRef.current?.setNextKinematicTranslation(gridToWorld(headGX, headGZ));
+    const spawn = gridToWorld(headGX, headGZ);
+    visualRef.current?.position.copy(spawn);
+    visualFromRef.current.copy(spawn);
+    visualTargetRef.current.copy(spawn);
+    visualElapsedRef.current = stepInterval;
+    bodyRef.current?.setTranslation(spawn, true);
+    bodyRef.current?.setNextKinematicTranslation(spawn);
     camera.position.copy(CAMERA_BASE);
     camera.lookAt(0, 0.5, 0);
-  }, [camera, gameState, mazeMatrix]);
+  }, [camera, sessionId, mazeMatrix]);
 
-  // keep segmentRefs trimmed to authoritative active count to avoid stale indexes
   useEffect(() => {
-    segmentRefs.current.length = segmentCount;
-  }, [segmentCount]);
-
-  // unified input gate: validate and enqueue a requested direction
-  const requestDirection = (dx, dz) => {
-    if (gameState !== 'playing') return false;
-    if (!Number.isFinite(dx) || !Number.isFinite(dz)) return false;
-    dx = Math.round(dx);
-    dz = Math.round(dz);
-    // allow only cardinal unit vectors
-    const valid = (Math.abs(dx) === 1 && dz === 0) || (Math.abs(dz) === 1 && dx === 0);
-    if (!valid) return false;
-
-    const committed = dirRef.current;
-    // reject direct reversal against the committed direction
-    if (dx === -committed.x && dz === -committed.z) return false;
-    // ignore if identical to committed
-    if (dx === committed.x && dz === committed.z) return false;
-    // allow only one pending change before next logical tick
-    if (pendingDirRef.current) return false;
-
-    pendingDirRef.current = { x: dx, z: dz };
-    return true;
-  };
+    if (gameState === 'playing' && !mergeFeedback) return;
+    tickRef.current = 0;
+    pendingDirRef.current = null;
+    prevGridRef.current = { ...curGridRef.current };
+    const position = gridToWorld(curGridRef.current.gx, curGridRef.current.gz);
+    bodyRef.current?.setTranslation(position, true);
+    bodyRef.current?.setNextKinematicTranslation(position);
+  }, [gameState, mergeFeedback]);
 
   // keyboard fallback — enqueue at most one pending direction per logical tick
   useEffect(() => {
+    const queueDirection = (direction) => {
+      const state = useGameStore.getState();
+      if (state.sessionId !== sessionId || state.gameState !== 'playing' || state.mergeFeedback || !direction) return;
+
+      const { x: dx, z: dz } = direction;
+      if (!Number.isInteger(dx) || !Number.isInteger(dz) || Math.abs(dx) + Math.abs(dz) !== 1) return;
+      const committed = dirRef.current;
+      // Reject direct reversal against the committed direction.
+      if (dx === -committed.x && dz === -committed.z) return;
+      // Ignore repeated requests for the current direction.
+      if (dx === committed.x && dz === committed.z) return;
+      // Keep one pending change per logical tick across all input sources.
+      if (pendingDirRef.current) return;
+
+      pendingDirRef.current = { x: dx, z: dz };
+    };
+
     const onKey = (e) => {
-      if (gameState !== 'playing') return;
+      if (e.repeat) return;
       const code = e.code;
       let dx = 0;
       let dz = 0;
@@ -313,44 +366,109 @@ function Player() {
 
       // prevent page scrolling while playing for arrow keys
       if (code.startsWith('Arrow')) e.preventDefault();
-
-      requestDirection(dx, dz);
+      queueDirection({ x: dx, z: dz });
     };
 
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [gameState]);
+    const onDirection = (e) => {
+      queueDirection(e.detail);
+    };
 
-  // listen for external mobile/custom direction events
-  useEffect(() => {
-    const onDir = (e) => {
-      try {
-        const d = e && e.detail;
-        if (!d) return;
-        requestDirection(d.x, d.z);
-      } catch (err) {
-        // ignore malformed event
+    let swipeStart = null;
+    const onTouchStart = (e) => {
+      if (gameState !== 'playing' || mergeFeedback || e.touches.length !== 1) return;
+      const target = e.target;
+      if (target instanceof Element && target.closest('[data-dpad]')) return;
+      const touch = e.touches[0];
+      swipeStart = { id: touch.identifier, x: touch.clientX, y: touch.clientY };
+    };
+
+    const onTouchEnd = (e) => {
+      if (!swipeStart) return;
+      const touch = Array.from(e.changedTouches).find(({ identifier }) => identifier === swipeStart.id);
+      const start = swipeStart;
+      swipeStart = null;
+      if (!touch) return;
+
+      const dx = touch.clientX - start.x;
+      const dy = touch.clientY - start.y;
+      const distance = Math.hypot(dx, dy);
+      if (distance < 30) return;
+
+      if (Math.abs(dx) > Math.abs(dy)) {
+        queueDirection({ x: dx > 0 ? 1 : -1, z: 0 });
+      } else {
+        queueDirection({ x: 0, z: dy > 0 ? 1 : -1 });
       }
     };
 
-    window.addEventListener('snake-direction', onDir);
-    return () => window.removeEventListener('snake-direction', onDir);
-  }, [gameState]);
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('game-direction', onDirection);
+    window.addEventListener('touchstart', onTouchStart, { passive: true });
+    window.addEventListener('touchend', onTouchEnd, { passive: true });
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('game-direction', onDirection);
+      window.removeEventListener('touchstart', onTouchStart);
+      window.removeEventListener('touchend', onTouchEnd);
+    };
+  }, [gameState, mergeFeedback, sessionId]);
 
   useFrame((_, delta) => {
     const rb = bodyRef.current;
-    if (!rb || gameState !== 'playing') return;
+    const state = useGameStore.getState();
+    if (!rb || state.sessionId !== sessionId || readySessionRef.current !== sessionId) return;
+    if (state.gameState !== 'playing' || state.mergeFeedback) {
+      tickRef.current = 0;
+      pendingDirRef.current = null;
+      return;
+    }
+
+    const currentPlayerCell = getLogicalGridCell(curGridRef.current, mazeMatrix);
+    const overlappingEnemy = (state.enemyPositions || []).find((enemy) => {
+      const enemyCell = getLogicalGridCell(enemy, mazeMatrix);
+      return enemyCell
+        && currentPlayerCell
+        && enemyCell.gx === currentPlayerCell.gx
+        && enemyCell.gz === currentPlayerCell.gz;
+    });
+    if (overlappingEnemy) {
+      console.warn('[GAME_OVER]', {
+        reason: 'ENEMY_COLLISION',
+        source: 'PLAYER_OVERLAP',
+        player: currentPlayerCell,
+        enemy: getLogicalGridCell(overlappingEnemy, mazeMatrix),
+        enemyId: overlappingEnemy.id,
+      });
+      dispatchPlayerDeath({
+        playerPosition: state.playerPosition,
+        currentValue: state.currentValue,
+      });
+      gameOver();
+      return;
+    }
+
+    // Rendering is independent of the authoritative grid and Rapier's interpolation.
+    visualElapsedRef.current = Math.min(stepInterval, visualElapsedRef.current + delta);
+    visualRef.current.position.lerpVectors(
+      visualFromRef.current, visualTargetRef.current, visualElapsedRef.current / stepInterval,
+    );
+
+    const headWorld = visualRef.current.position;
+    const camTarget = headWorld.clone().add(new THREE.Vector3(0, CAMERA_BASE.y, CAMERA_BASE.z));
+    camera.position.lerp(camTarget, Math.min(1, delta * 4.5));
+    camera.lookAt(headWorld.x, headWorld.y + 0.6, headWorld.z);
 
     // tiny diagnostic helper to report why a logical game over occurred
     const reportGameOver = (reason, details = {}) => {
       // Emit a deterministic console warning with structured details
       // eslint-disable-next-line no-console
-      console.warn('[SNAKE_GAME_OVER]', { reason, ...details });
+      console.warn('[GAME_OVER]', { reason, ...details });
       gameOver();
     };
 
     // timing accumulator: keep remainder when a logical step occurs
-    tickRef.current += delta;
+    // Discard stalled-frame debt instead of bursting through several cells.
+    tickRef.current += Math.min(delta, stepInterval);
     elapsedRef.current += delta;
     elapsedSyncRef.current += delta;
 
@@ -361,11 +479,14 @@ function Player() {
 
     // process one-or-more logical steps while preserving remainder
     while (tickRef.current >= stepInterval) {
+      const live = useGameStore.getState();
+      if (live.sessionId !== sessionId || live.gameState !== 'playing' || live.mergeFeedback) {
+        tickRef.current = 0;
+        pendingDirRef.current = null;
+        return;
+      }
       // consume the interval but keep remainder
       tickRef.current -= stepInterval;
-
-      // clear any previous new-tail hold now that a new interval starts
-      newTailHoldRef.current = null;
 
       // commit pending direction (if any) once per tick before movement calculation
       if (pendingDirRef.current) {
@@ -386,7 +507,7 @@ function Player() {
 
       // Validate candidate BEFORE mutating any runtime/grid state
       if (!isInsideMaze(candidateGX, candidateGZ)) {
-        // Outside arena -> game over. Do not mutate any refs or history.
+        // Outside arena -> game over. Do not mutate authoritative position.
         reportGameOver('BOUNDARY', {
           currentGX: curGridRef.current.gx,
           currentGZ: curGridRef.current.gz,
@@ -399,8 +520,8 @@ function Player() {
       }
 
       // Safe to index mazeMatrix now because candidate is inside bounds
-      if (mazeMatrix[candidateGZ][candidateGX] === 1) {
-        // Wall cell -> game over. Do not mutate any refs or history.
+      if (mazeMatrix[candidateGZ][candidateGX] !== 0) {
+        // Wall cell -> game over. Do not mutate authoritative position.
         reportGameOver('WALL', {
           currentGX: curGridRef.current.gx,
           currentGZ: curGridRef.current.gz,
@@ -411,83 +532,56 @@ function Player() {
         return;
       }
 
-      // Self-collision check (grid-based) — exclude the current tail cell which will vacate this tick
-      const snakeLen = (useGameStore.getState().snakeSegments || []).length;
-      // collision cells are history[1] .. history[snakeLen - 2] inclusive
-      const collisionEnd = snakeLen - 2;
-      if (collisionEnd >= 1) {
-        for (let i = 1; i <= collisionEnd; i += 1) {
-          const h = gridHistoryRef.current[i];
-          if (!h) continue;
-          if (h.gx === candidateGX && h.gz === candidateGZ) {
-            // collided with body (not tail) -> game over
-            reportGameOver('SELF', {
-              currentGX: curGridRef.current.gx,
-              currentGZ: curGridRef.current.gz,
-              candidateGX,
-              candidateGZ,
-              collisionHistoryIndex: i,
-              snakeLength: snakeLen,
-            });
-            return;
-          }
-        }
-      }
-
-      // Candidate valid and not colliding: commit movement
-      // advance grid
+      // Candidate is valid: commit the authoritative single-cell movement.
       prevGridRef.current = { ...curGridRef.current };
       curGridRef.current = { gx: candidateGX, gz: candidateGZ };
-
-      // reset interpolation fraction for the new step; the visual fraction will be recomputed below from the accumulator
       interpRef.current = 0;
+      const playerWorld = gridToWorld(candidateGX, candidateGZ);
+      visualFromRef.current.copy(visualRef.current.position);
+      visualTargetRef.current.copy(playerWorld);
+      visualElapsedRef.current = 0;
+      useGameStore.getState().syncPlayerPosition(playerWorld);
 
-      // push to history (head first)
-      gridHistoryRef.current.unshift({ gx: candidateGX, gz: candidateGZ });
-
-      // trim history deterministically to needed length (segments + margin)
-      const keep = segmentCount + 5;
-      if (gridHistoryRef.current.length > keep) gridHistoryRef.current.length = keep;
-
-      // prepare segments positions for store sync using grid-derived positions (authoritative)
-      const syncCount = segmentCount + 1; // head + bodies
-      const syncGrid = gridHistoryRef.current.slice(0, syncCount);
-      const segmentsWorld = syncGrid.map((g) => {
-        const v = gridToWorld(g.gx, g.gz);
-        return { x: v.x, y: v.y, z: v.z };
+      const enemies = useGameStore.getState().enemyPositions || [];
+      const collidedEnemy = enemies.find((enemy) => {
+        const enemyCell = getLogicalGridCell(enemy, mazeMatrix);
+        return enemyCell?.gx === candidateGX && enemyCell?.gz === candidateGZ;
       });
-
-      // record old length BEFORE growth to compute growthGrid index
-      const oldLength = (useGameStore.getState().snakeSegments || []).length;
-
-      useGameStore.getState().syncSnakeSegments(segmentsWorld);
+      if (collidedEnemy) {
+        console.warn('[GAME_OVER]', {
+          reason: 'ENEMY_COLLISION',
+          source: 'PLAYER_TO_ENEMY',
+          player: { gx: candidateGX, gz: candidateGZ },
+          enemy: getLogicalGridCell(collidedEnemy, mazeMatrix),
+          enemyId: collidedEnemy.id,
+        });
+        dispatchPlayerDeath({
+          playerPosition: playerWorld,
+          currentValue: useGameStore.getState().currentValue,
+        });
+        gameOver();
+        return;
+      }
 
       // After authoritative store sync, check logical food consumption using grid equality
       const food = useGameStore.getState().foodPosition;
       if (food && typeof food.gx === 'number' && food.gx === candidateGX && food.gz === candidateGZ) {
-        // determine growth grid (the previous tail cell) from history at index oldLength
-        const growthGrid = gridHistoryRef.current[oldLength];
-        let growthWorld = null;
-        if (growthGrid) {
-          const v = gridToWorld(growthGrid.gx, growthGrid.gz);
-          growthWorld = { x: v.x, y: v.y, z: v.z };
-        }
-
-        // multi-value growth: append additional repeated copies of growthGrid to history
-        const eatenValue = useGameStore.getState().currentFoodValue || 0;
-        if (growthGrid && eatenValue > 0) {
-          // gridHistory already contains the previous tail at index oldLength; append (eatenValue - 1) more copies
-          const extra = Math.max(0, eatenValue - 1);
-          for (let k = 0; k < extra; k += 1) {
-            gridHistoryRef.current.push({ gx: growthGrid.gx, gz: growthGrid.gz });
-          }
-          // stabilize new-tail visuals at the first appended index
-          // segmentRefs contains body-only entries, so the body index for the new tail is oldLength - 1
-          newTailHoldRef.current = { index: Math.max(0, oldLength - 1), gx: growthGrid.gx, gz: growthGrid.gz };
-        }
-
-        // consume exactly once per logical tick, providing authoritative growth world position
-        useGameStore.getState().eatFood(growthWorld);
+        // Dispatch FOOD_EAT VFX event
+        dispatchFoodEat({
+          position: {
+            x: playerWorld.x,
+            z: playerWorld.z,
+            gx: candidateGX,
+            gz: candidateGZ,
+          },
+        });
+        useGameStore.getState().beginFoodMerge();
+        tickRef.current = 0;
+        pendingDirRef.current = null;
+        prevGridRef.current = { ...curGridRef.current };
+        rb.setTranslation(playerWorld, true);
+        rb.setNextKinematicTranslation(playerWorld);
+        return;
       }
     }
 
@@ -500,34 +594,6 @@ function Player() {
     const pos = prev.clone().lerp(cur, interpRef.current);
     rb.setNextKinematicTranslation(pos);
 
-    // update segments visuals by following consecutive gridHistory cells
-    const maxHistory = segmentCount + 5; // keep only enough history for segments + small margin
-    if (gridHistoryRef.current.length > maxHistory) gridHistoryRef.current.length = maxHistory;
-
-    segmentRefs.current.forEach((segment, i) => {
-      if (!segment) return;
-      // If this is a newly grown tail being held, keep it fixed at the growth cell for this interval
-      if (newTailHoldRef.current && newTailHoldRef.current.index === i) {
-        const p = gridToWorld(newTailHoldRef.current.gx, newTailHoldRef.current.gz);
-        segment.position.set(p.x, p.y, p.z);
-        return;
-      }
-
-      // new logical cell for this body segment is history[i+1]
-      // previous logical cell is history[i+2]
-      const newGrid = gridHistoryRef.current[i + 1] ?? curGridRef.current;
-      const prevGrid = gridHistoryRef.current[i + 2] ?? newGrid;
-      const prevWorld = gridToWorld(prevGrid.gx, prevGrid.gz);
-      const newWorld = gridToWorld(newGrid.gx, newGrid.gz);
-      // interpolate using the same interpRef as the head to avoid corner-cutting
-      segment.position.lerpVectors(prevWorld, newWorld, interpRef.current);
-    });
-
-    // camera follow — follow the interpolated head position (pos)
-    const headWorld = pos.clone();
-    const camTarget = headWorld.clone().add(new THREE.Vector3(0, CAMERA_BASE.y, CAMERA_BASE.z));
-    camera.position.lerp(camTarget, Math.min(1, delta * 4.5));
-    camera.lookAt(headWorld.x, headWorld.y + 0.6, headWorld.z);
   });
 
   return (
@@ -540,10 +606,19 @@ function Player() {
         name="player-head"
       >
         <CuboidCollider args={[0.38, 0.38, 0.38]} />
+      </RigidBody>
+      <group ref={visualRef} name="player-visual" position={[0, 0.5, 0]} frustumCulled={false}>//ukuran gacoan  visual disesuaikan dengan ukuran Numberblock
           {/* Head: use Numberblock sprite as primary when available, otherwise fallback to cube */}
           {headTex ? (
-            <sprite position={[0, 0, 0]} scale={[headScale, headScale, 1]}> 
-              <spriteMaterial attach="material" map={headTex} transparent />
+            <sprite position={[0, 0, 0]} scale={[2.0, 2.0, 1]} renderOrder={10} frustumCulled={false}>
+              <spriteMaterial
+                attach="material"
+                map={headTex}
+                transparent
+                alphaTest={0.1}
+                depthWrite={false}
+                depthTest={false}
+              />
             </sprite>
           ) : (
             <mesh castShadow>
@@ -551,32 +626,16 @@ function Player() {
               <meshStandardMaterial color={skin.headColor} roughness={0.45} metalness={0.2} />
             </mesh>
           )}
-      </RigidBody>
+      </group>
 
-      {Array.from({ length: Math.max(0, segmentCount) }).map((_, i) => (
-        <group
-          key={`segment-${i}`}
-          ref={(el) => { segmentRefs.current[i] = el; }}
-          position={[0, 0.5, -(i + 1) * 0.7]}
-        >
-          {headTex ? (
-            <sprite position={[0, 0, 0]} scale={[bodyScale, bodyScale, 1]}> 
-              <spriteMaterial attach="material" map={headTex} transparent />
-            </sprite>
-          ) : (
-            <mesh castShadow>
-              <sphereGeometry args={[0.3, 14, 14]} />
-              <meshStandardMaterial color={skin.bodyColor} roughness={0.5} metalness={0.1} />
-            </mesh>
-          )}
-        </group>
-      ))}
     </group>
   );
 }
 
 export default function Scene() {
   const mazeMatrix = useGameStore((s) => s.mazeMatrix);
+  const enemyPositions = useGameStore((s) => s.enemyPositions ?? []);
+  const enemySprites = useGameStore((s) => s.levelConfig?.enemySprites ?? []);
   const rows = mazeMatrix.length;
   const cols = mazeMatrix[0].length;
   return (
@@ -593,7 +652,15 @@ export default function Scene() {
       <Physics gravity={[0, -9.81, 0]}>
         <Map />
         <Player />
+        {enemyPositions.map((enemy, index) => (
+          <Enemy
+            key={enemy.id}
+            enemy={enemy}
+            spritePath={enemySprites.length ? enemySprites[index % enemySprites.length] : null}
+          />
+        ))}
         <Food />
+        <VFXManager />
       </Physics>
 
       <Environment preset="city" />

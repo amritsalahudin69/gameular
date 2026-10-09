@@ -1,8 +1,9 @@
-import { useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { KeyboardControls } from '@react-three/drei';
 import Scene from './Scene.jsx';
-import { SKIN_PRESETS, useGameStore } from './Store';
+import Minimap from './Minimap.jsx';
+import { MERGE_FEEDBACK_MS, SKIN_PRESETS, useGameStore } from './Store';
 
 const controlsMap = [
   { name: 'left', keys: ['ArrowLeft', 'KeyA'] },
@@ -18,15 +19,53 @@ const formatTime = (seconds) => {
   return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 };
 
+const dispatchDirection = (x, z) => {
+  window.dispatchEvent(new CustomEvent('game-direction', { detail: { x, z } }));
+};
+
 function Hud() {
   const score = useGameStore((s) => s.score);
+  const currentValue = useGameStore((s) => s.currentValue);
   const highScore = useGameStore((s) => s.highScore);
   const elapsedTime = useGameStore((s) => s.elapsedTime);
   const gameState = useGameStore((s) => s.gameState);
   const selectedSkin = useGameStore((s) => s.selectedSkin);
   const setSkin = useGameStore((s) => s.setSkin);
   const startGame = useGameStore((s) => s.startGame);
-  const currentValue = useGameStore((s) => s.currentValue);
+  const mergeFeedback = useGameStore((s) => s.mergeFeedback);
+  const finishFoodMerge = useGameStore((s) => s.finishFoodMerge);
+  const [failedGifPath, setFailedGifPath] = useState(null);
+  const resultGifPath = mergeFeedback ? `/assets/gif/${mergeFeedback.result}.gif` : null;
+  const foodValue = useGameStore((s) => s.currentFoodValue);
+
+  useEffect(() => {
+    if (gameState !== 'idle' && gameState !== 'gameover') return undefined;
+
+    const onStartShortcut = (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      startGame();
+    };
+
+    window.addEventListener('keydown', onStartShortcut);
+    return () => window.removeEventListener('keydown', onStartShortcut);
+  }, [gameState, startGame]);
+
+  useEffect(() => {
+    if (typeof foodValue !== 'number') return;
+    const image = new Image();
+    image.src = `/assets/gif/${currentValue + foodValue}.gif`;
+  }, [currentValue, foodValue]);
+
+  useEffect(() => {
+    if (!mergeFeedback) {
+      setFailedGifPath(null);
+      return undefined;
+    }
+
+    const timer = window.setTimeout(finishFoodMerge, MERGE_FEEDBACK_MS);
+    return () => window.clearTimeout(timer);
+  }, [finishFoodMerge, mergeFeedback]);
 
   return (
     <div
@@ -39,6 +78,7 @@ function Hud() {
       }}
     >
       <div style={{ position: 'absolute', top: 18, left: 18, fontSize: 15, lineHeight: 1.5 }}>
+        <div>Value: {currentValue}</div>
         <div>Score: {score}</div>
         <div>Best: {highScore}</div>
         <div>Time: {formatTime(elapsedTime)}</div>
@@ -53,9 +93,6 @@ function Hud() {
           display: 'flex',
           gap: 8,
           alignItems: 'center',
-          flexWrap: 'wrap',
-          maxWidth: '48vw',
-          justifyContent: 'flex-end',
         }}
       >
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -91,240 +128,151 @@ function Hud() {
         ))}
       </div>
 
-      {(gameState === 'idle' || gameState === 'gameover' || gameState === 'complete') && (
+      {(gameState === 'idle' || gameState === 'gameover') && (
         <div
+          className={gameState === 'gameover' ? 'game-over-card' : undefined}
           style={{
             pointerEvents: 'auto',
             position: 'absolute',
-            top: '50%',
+            top: gameState === 'gameover' ? undefined : '50%',
             left: '50%',
-            transform: 'translate(-50%, -50%)',
+            transform: gameState === 'gameover' ? 'translateX(-50%)' : 'translate(-50%, -50%)',
             textAlign: 'center',
+            minWidth: gameState === 'gameover' ? undefined : 'min(78vw, 320px)',
+            padding: gameState === 'gameover' ? undefined : '22px 24px',
+            borderRadius: 16,
+            background: 'rgba(4, 18, 24, 0.9)',
+            border: gameState === 'gameover' ? '2px solid #fb7185' : '1px solid #35514d',
+            boxShadow: '0 12px 40px rgba(0, 0, 0, 0.35)',
+            zIndex: 6,
           }}
         >
-          {gameState === 'complete' ? (
-            <div>
-              <div style={{ marginBottom: 12, fontSize: 22, fontWeight: 800 }}>Level Complete</div>
-              <div style={{ marginBottom: 8 }}>Final Numberblock: {currentValue}</div>
-              <div style={{ marginBottom: 16 }}>Score: {score}</div>
-              <button
-                onClick={startGame}
-                style={{
-                  border: 0,
-                  borderRadius: 10,
-                  background: '#22d3ee',
-                  color: '#042f2e',
-                  padding: '12px 20px',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                }}
-              >
-                Play Again
-              </button>
+          {gameState === 'gameover' && (
+            <div className="game-over-heading" style={{ color: '#fecdd3', fontWeight: 800 }}>
+              Game Over
             </div>
+          )}
+          <button
+            className={gameState === 'gameover' ? 'game-over-restart' : undefined}
+            onClick={startGame}
+            style={{
+              border: 0,
+              borderRadius: 10,
+              background: '#22d3ee',
+              color: '#042f2e',
+              padding: gameState === 'gameover' ? undefined : '12px 20px',
+              fontWeight: 700,
+              cursor: 'pointer',
+            }}
+          >
+            {gameState === 'gameover' ? 'Restart' : 'Start Game'}
+          </button>
+        </div>
+      )}
+
+      {mergeFeedback && (
+        <div
+          aria-live="polite"
+          aria-label={`Merging into ${mergeFeedback.result}`}
+          style={{
+            position: 'absolute',
+            left: '50%',
+            top: '50%',
+            transform: 'translate(-50%, -50%)',
+            width: 'min(62vw, 260px)',
+            aspectRatio: '1',
+            display: 'grid',
+            placeItems: 'center',
+            borderRadius: 18,
+            background: 'rgba(4, 18, 24, 0.86)',
+            border: '2px solid #22d3ee',
+            boxShadow: '0 0 28px rgba(34, 211, 238, 0.42)',
+            pointerEvents: 'none',
+            zIndex: 5,
+          }}
+        >
+          {failedGifPath !== resultGifPath ? (
+            <img
+              key={resultGifPath}
+              src={resultGifPath}
+              alt={`Merge result ${mergeFeedback.result}`}
+              onError={() => setFailedGifPath(resultGifPath)}
+              style={{ width: '82%', height: '82%', objectFit: 'contain' }}
+            />
           ) : (
-            <button
-              onClick={startGame}
-              style={{
-                border: 0,
-                borderRadius: 10,
-                background: '#22d3ee',
-                color: '#042f2e',
-                padding: '12px 20px',
-                fontWeight: 700,
-                cursor: 'pointer',
-              }}
-            >
-              {gameState === 'gameover' ? 'Restart' : 'Start Game'}
-            </button>
+            <div style={{ textAlign: 'center', color: '#ecfeff' }}>
+              <div style={{ fontSize: 14, opacity: 0.8 }}>MERGE</div>
+              <div style={{ fontSize: 56, fontWeight: 800 }}>{mergeFeedback.result}</div>
+            </div>
           )}
         </div>
       )}
+
+      <div
+        data-dpad
+        aria-label="Directional controls"
+        style={{
+          position: 'absolute',
+          left: '50%',
+          bottom: 'calc(18px + env(safe-area-inset-bottom))',
+          transform: 'translateX(-50%)',
+          display: 'grid',
+          gridTemplateColumns: 'repeat(3, 48px)',
+          gridTemplateRows: 'repeat(3, 48px)',
+          gap: 5,
+          pointerEvents: 'auto',
+          touchAction: 'none',
+        }}
+      >
+        {[
+          { label: 'Up', x: 0, z: -1, col: 2, row: 1 },
+          { label: 'Left', x: -1, z: 0, col: 1, row: 2 },
+          { label: 'Right', x: 1, z: 0, col: 3, row: 2 },
+          { label: 'Down', x: 0, z: 1, col: 2, row: 3 },
+        ].map(({ label, x, z, col, row }) => (
+          <button
+            key={label}
+            type="button"
+            aria-label={`Move ${label}`}
+            onPointerDown={(e) => {
+              e.preventDefault();
+              dispatchDirection(x, z);
+            }}
+            style={{
+              gridColumn: col,
+              gridRow: row,
+              border: '1px solid #35514d',
+              borderRadius: 10,
+              background: 'rgba(13, 34, 39, 0.9)',
+              color: '#dff8ff',
+              fontSize: 22,
+              fontWeight: 700,
+              cursor: 'pointer',
+              touchAction: 'none',
+            }}
+          >
+            {label === 'Up' ? '↑' : label === 'Down' ? '↓' : label === 'Left' ? '←' : '→'}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
 
 export default function App() {
-  const gameState = useGameStore((s) => s.gameState);
-
-  const DPad = () => {
-    if (gameState !== 'playing') return null;
-    const btnCommon = {
-      width: 56,
-      height: 56,
-      borderRadius: 12,
-      background: 'rgba(16, 54, 61, 0.78)',
-      color: '#e6fffd',
-      border: '1px solid rgba(255,255,255,0.08)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      touchAction: 'none',
-      userSelect: 'none',
-      WebkitUserSelect: 'none',
-      msUserSelect: 'none',
-      cursor: 'pointer',
-      fontSize: 18,
-      lineHeight: '18px',
-    };
-
-    const dispatchDir = (x, z, e) => {
-      if (e && typeof e.preventDefault === 'function') e.preventDefault();
-      if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
-      window.dispatchEvent(new CustomEvent('snake-direction', { detail: { x, z } }));
-    };
-
-    return (
-      <div
-        style={{
-          position: 'fixed',
-          bottom: 18,
-          left: 18,
-          width: 170,
-          height: 170,
-          pointerEvents: 'auto',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        <div style={{ position: 'relative', width: 170, height: 170 }}>
-          <div style={{ position: 'absolute', left: 57, top: 6 }}>
-            <div
-              role="button"
-              tabIndex={0}
-              onPointerDown={(e) => dispatchDir(0, -1, e)}
-              onPointerUp={(e) => e.stopPropagation()}
-              style={{ ...btnCommon }}
-            >
-              ▲
-            </div>
-          </div>
-
-          <div style={{ position: 'absolute', left: 6, top: 57 }}>
-            <div
-              role="button"
-              tabIndex={0}
-              onPointerDown={(e) => dispatchDir(-1, 0, e)}
-              onPointerUp={(e) => e.stopPropagation()}
-              style={{ ...btnCommon }}
-            >
-              ◀
-            </div>
-          </div>
-
-          <div style={{ position: 'absolute', left: 57, top: 57 }}>
-            <div
-              role="button"
-              tabIndex={0}
-              onPointerDown={(e) => dispatchDir(0, 1, e)}
-              onPointerUp={(e) => e.stopPropagation()}
-              style={{ ...btnCommon }}
-            >
-              ▼
-            </div>
-          </div>
-
-          <div style={{ position: 'absolute', left: 108, top: 57 }}>
-            <div
-              role="button"
-              tabIndex={0}
-              onPointerDown={(e) => dispatchDir(1, 0, e)}
-              onPointerUp={(e) => e.stopPropagation()}
-              style={{ ...btnCommon }}
-            >
-              ▶
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  // swipe handling attached to the canvas container to detect mobile swipes
-  const swipeRef = useRef({ active: false, startX: 0, startY: 0, pointerId: null });
-  const SWIPE_THRESHOLD = 30; // pixels
-
-  const onCanvasPointerDown = (e) => {
-    // Ignore if starting on interactive controls (buttons/selects/inputs or elements with role=button)
-    const tgt = e.target;
-    if (!tgt) return;
-    const tag = (tgt.tagName || '').toUpperCase();
-    if (tag === 'BUTTON' || tag === 'SELECT' || tag === 'INPUT' || tgt.getAttribute && tgt.getAttribute('role') === 'button') return;
-
-    // only primary button for mouse
-    if (e.pointerType === 'mouse' && e.button !== 0) return;
-
-    swipeRef.current.active = true;
-    swipeRef.current.startX = e.clientX;
-    swipeRef.current.startY = e.clientY;
-    swipeRef.current.pointerId = e.pointerId;
-
-    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
-  };
-
-  const onCanvasPointerUp = (e) => {
-    if (!swipeRef.current.active) return;
-    if (e.pointerId !== swipeRef.current.pointerId) return;
-
-    const dx = e.clientX - swipeRef.current.startX;
-    const dy = e.clientY - swipeRef.current.startY;
-
-    // reset state early to avoid duplicate handling
-    swipeRef.current.active = false;
-    swipeRef.current.pointerId = null;
-
-    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (_) {}
-
-    if (Math.abs(dx) < SWIPE_THRESHOLD && Math.abs(dy) < SWIPE_THRESHOLD) return; // tap
-
-    // dominant axis
-    if (Math.abs(dx) > Math.abs(dy)) {
-      // horizontal
-      if (dx > 0) window.dispatchEvent(new CustomEvent('snake-direction', { detail: { x: 1, z: 0 } }));
-      else window.dispatchEvent(new CustomEvent('snake-direction', { detail: { x: -1, z: 0 } }));
-    } else {
-      // vertical
-      if (dy > 0) window.dispatchEvent(new CustomEvent('snake-direction', { detail: { x: 0, z: 1 } }));
-      else window.dispatchEvent(new CustomEvent('snake-direction', { detail: { x: 0, z: -1 } }));
-    }
-  };
-
-  const onCanvasPointerCancel = (e) => {
-    swipeRef.current.active = false;
-    swipeRef.current.pointerId = null;
-    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (_) {}
-  };
-
   return (
     <KeyboardControls map={controlsMap}>
-      <div
-        onPointerDown={onCanvasPointerDown}
-        onPointerUp={onCanvasPointerUp}
-        onPointerCancel={onCanvasPointerCancel}
-        style={{
-          position: 'fixed',
-          inset: 0,
-          width: '100vw',
-          height: '100dvh',
-          overflow: 'hidden',
-          touchAction: 'none',
-          WebkitOverflowScrolling: 'auto',
-        }}
+      <Canvas
+        shadows
+        gl={{ alpha: false, antialias: false, powerPreference: 'high-performance' }}
+        camera={{ fov: 55, near: 0.1, far: 100, position: [0, 7.5, 8.5] }}
+        dpr={[1, 1.5]}
       >
-        <Canvas
-          style={{ width: '100%', height: '100%' }}
-          shadows
-          gl={{ alpha: false, antialias: false, powerPreference: 'high-performance' }}
-          camera={{ fov: 55, near: 0.1, far: 100, position: [0, 7.5, 8.5] }}
-          dpr={[1, 1.5]}
-        >
-          <color attach="background" args={['#0b1316']} />
-          <Scene />
-        </Canvas>
-      </div>
+        <color attach="background" args={['#0b1316']} />
+        <Scene />
+      </Canvas>
       <Hud />
-      <DPad />
+      <Minimap />
     </KeyboardControls>
   );
 }
