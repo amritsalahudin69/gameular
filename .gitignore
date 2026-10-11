@@ -3,6 +3,7 @@ dist
 .DS_Store
 
 *.png
-*.webp
 *.jpg
+*.jpeg
 *.gif
+*.webp
